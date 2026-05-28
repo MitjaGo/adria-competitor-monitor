@@ -3,35 +3,28 @@ import pandas as pd
 from datetime import date, timedelta
 from apify_client import ApifyClient
 
-# ─────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1at8Qo7Ne28Fb43WfhoXN0IpRBnwmenfgCVRZytTEGDA/export?format=csv"
 
 st.set_page_config(page_title="Hotel Monitor", layout="wide")
 
 
-# ─────────────────────────────────────────────
-# LOAD GOOGLE SHEET (SAFE)
-# ─────────────────────────────────────────────
+# ─────────────────────────────
+# LOAD SHEET
+# ─────────────────────────────
 @st.cache_data(ttl=600)
 def load_sheet():
     df = pd.read_csv(SHEET_URL)
-
-    # 🔥 CLEAN HEADERS (CRITICAL FIX)
     df.columns = df.columns.str.strip().str.lower()
-
     return df
 
 
-# ─────────────────────────────────────────────
-# APIFY SCRAPER
-# ─────────────────────────────────────────────
-def scrape_prices(checkin, checkout, adults, location="Ankaran"):
-    token = st.secrets.get("APIFY_TOKEN") or None
+# ─────────────────────────────
+# APIFY
+# ─────────────────────────────
+def fetch_prices(checkin, checkout, adults, location):
+    token = st.secrets.get("APIFY_TOKEN")
 
     if not token:
-        st.warning("No Apify token → demo mode")
         return []
 
     client = ApifyClient(token)
@@ -47,110 +40,123 @@ def scrape_prices(checkin, checkout, adults, location="Ankaran"):
         "maxResults": 30
     })
 
-    dataset_id = getattr(run, "default_dataset_id", None) or run.get("defaultDatasetId")
+    dataset_id = run.get("defaultDatasetId") or getattr(run, "default_dataset_id", None)
 
     items = list(client.dataset(dataset_id).iterate_items())
 
-    results = []
-
     nights = (checkout - checkin).days or 1
 
+    out = []
+
     for h in items:
-        name = h.get("name", "")
         price = float(h.get("price") or 0)
 
-        results.append({
-            "hotel": name,
+        if price <= 0:
+            continue
+
+        out.append({
+            "hotel": h.get("name"),
+            "adults": adults,
             "price": price,
-            "per_night": round(price / nights, 2),
+            "per_night": round(price / nights, 2)
         })
 
-    return results
+    return out
 
 
-# ─────────────────────────────────────────────
+# ─────────────────────────────
 # UI
-# ─────────────────────────────────────────────
-st.title("🏨 Hotel Competitor Monitor")
+# ─────────────────────────────
+st.title("🏨 Competitor Intelligence")
 
 df_sheet = load_sheet()
 
-# FIX COLUMNS (NO MORE ERRORS EVER)
-if "hotel" not in df_sheet.columns or "type" not in df_sheet.columns:
-    st.error(f"Sheet must contain columns: hotel, type")
-    st.write(df_sheet.columns.tolist())
-    st.stop()
+# CLEAN
+df_sheet["hotel"] = df_sheet["hotel"].astype(str).str.strip()
+df_sheet["type"] = df_sheet["type"].astype(str).str.strip().str.lower()
 
-self_hotels = df_sheet[df_sheet["type"].str.lower() == "self"]["hotel"].dropna().tolist()
+self_list = df_sheet[df_sheet["type"] == "self"]["hotel"].unique().tolist()
+comp_list = df_sheet[df_sheet["type"] != "self"]["hotel"].unique().tolist()
 
+# SELF SELECT
+self_hotel = st.selectbox("Select SELF hotel", self_list)
 
-# ─────────────────────────────────────────────
-# SIDEBAR
-# ─────────────────────────────────────────────
-with st.sidebar:
-    checkin = st.date_input("Check-in", date.today() + timedelta(days=14))
-    checkout = st.date_input("Check-out", checkin + timedelta(days=7))
-    adults = st.selectbox("Adults", [2, 3, 4, 5, 6], index=0)
+# filter competitors based on sheet relationships
+competitors = df_sheet[df_sheet["hotel"] == self_hotel]["competitors"] if "competitors" in df_sheet.columns else df_sheet
 
-    run_btn = st.button("Fetch")
+# fallback: all non-self
+competitors = df_sheet[df_sheet["type"] != "self"]["hotel"].tolist()
 
 
-# ─────────────────────────────────────────────
+# DATE
+checkin = st.date_input("Check-in", date.today() + timedelta(days=14))
+checkout = st.date_input("Check-out", checkin + timedelta(days=7))
+
+run = st.button("Fetch")
+
+
+# ─────────────────────────────
 # RUN
-# ─────────────────────────────────────────────
-if run_btn:
+# ─────────────────────────────
+if run:
 
-    live = scrape_prices(checkin, checkout, adults)
+    results = []
 
-    if not live:
-        st.error("No data from Apify")
+    # SELF + COMPETITORS ONLY
+    targets = [self_hotel] + competitors
+
+    for hotel in targets:
+
+        data = fetch_prices(checkin, checkout, 2, hotel)
+
+        if not data:
+            continue
+
+        df = pd.DataFrame(data)
+
+        df["is_self"] = df["hotel"] == self_hotel
+
+        # SORT: SELF FIRST, then price desc
+        df = df.sort_values(["is_self", "price"], ascending=[False, False])
+
+        results.append(df)
+
+    if not results:
+        st.error("No data")
         st.stop()
 
-    df_live = pd.DataFrame(live)
+    final = pd.concat(results)
 
-    # ── MERGE SHEET + LIVE ──
-    df = df_live.copy()
+    # ORDER: SELF FIRST
+    final["priority"] = final["hotel"].apply(lambda x: 0 if x == self_hotel else 1)
+    final = final.sort_values(["priority", "price"], ascending=[True, False])
 
-    # mark self hotels
-    df["is_self"] = df["hotel"].isin(self_hotels)
-
-    # sort HIGH → LOW (IMPORTANT CHANGE YOU WANTED)
-    df = df.sort_values("price", ascending=False)
-
-    # ── FILTER ONLY SELF + THEIR COMPETITORS ──
-    df = df[df["hotel"].notna()]
 
     # ─────────────────────────────
-    # DISPLAY
+    # DISPLAY ONLY AVAILABLE PERSON COUNTS
     # ─────────────────────────────
-    st.subheader("Results (High → Low)")
+    st.subheader("Results")
 
-    for _, r in df.iterrows():
+    for hotel in final["hotel"].unique():
 
-        tag = "🏨 COMPETITOR"
-        if r["is_self"]:
-            tag = "🌊 SELF HOTEL"
+        sub = final[final["hotel"] == hotel]
 
-        st.markdown(f"""
-### {r['hotel']}
-{tag}
+        st.markdown(f"## {hotel}")
 
+        for _, r in sub.iterrows():
+
+            # show ONLY if price exists
+            if pd.isna(r["price"]) or r["price"] <= 0:
+                continue
+
+            label = "SELF" if hotel == self_hotel else "COMPETITOR"
+
+            st.write(f"""
+**{label}**  
 💰 €{r['price']:,.0f}  
-🛏 €{r['per_night']:,.0f} / night
-
----
-""")
-
-    st.subheader("Table")
-
-    st.dataframe(df, use_container_width=True)
-
-    st.download_button(
-        "Download CSV",
-        df.to_csv(index=False).encode("utf-8"),
-        "hotels.csv"
-    )
+🛏 €{r['per_night']:,.0f} / night  
+---""")
 
 else:
-    st.info("Select dates and click Fetch")
+    st.info("Select dates and SELF hotel")
 
