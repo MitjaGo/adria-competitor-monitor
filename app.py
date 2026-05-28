@@ -5,7 +5,7 @@ from apify_client import ApifyClient
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1at8Qo7Ne28Fb43WfhoXN0IpRBnwmenfgCVRZytTEGDA/export?format=csv"
 
-st.set_page_config(page_title="Hotel Pricing Intelligence", layout="wide")
+st.set_page_config(page_title="Hotel Cluster Intelligence", layout="wide")
 
 
 # ─────────────────────────────
@@ -15,13 +15,15 @@ st.set_page_config(page_title="Hotel Pricing Intelligence", layout="wide")
 def load_sheet():
     df = pd.read_csv(SHEET_URL)
     df.columns = df.columns.str.strip().str.lower()
+    df["number"] = pd.to_numeric(df["number"], errors="coerce")
+    df["hotel"] = df["hotel"].astype(str).str.strip()
     return df
 
 
 # ─────────────────────────────
-# APIFY
+# APIFY FETCH
 # ─────────────────────────────
-def fetch(checkin, checkout, adults, location):
+def fetch_prices(checkin, checkout, adults, location):
     token = st.secrets.get("APIFY_TOKEN")
     if not token:
         return []
@@ -39,8 +41,7 @@ def fetch(checkin, checkout, adults, location):
         "maxResults": 30
     })
 
-    dataset_id = run.get("defaultDatasetId") or getattr(run, "default_dataset_id", None)
-
+    dataset_id = run.get("defaultDatasetId")
     items = list(client.dataset(dataset_id).iterate_items())
 
     nights = (checkout - checkin).days or 1
@@ -48,26 +49,14 @@ def fetch(checkin, checkout, adults, location):
     out = []
 
     for h in items:
-        name = (h.get("name") or "").lower()
         price = float(h.get("price") or 0)
-
         if price <= 0:
             continue
 
-        # ── BOARD TYPE DETECTION ──
-        board = "rental"
-
-        if "half" in name or "hb" in name:
-            board = "halfboard"
-        elif "breakfast" in name or "bb" in name:
-            board = "bb"
-
         out.append({
             "hotel": h.get("name"),
-            "adults": adults,
             "price": price,
             "per_night": round(price / nights, 2),
-            "board": board
         })
 
     return out
@@ -76,31 +65,44 @@ def fetch(checkin, checkout, adults, location):
 # ─────────────────────────────
 # UI
 # ─────────────────────────────
-st.title("🏨 Pricing Intelligence Engine")
+st.title("🏨 Cluster Hotel Pricing Intelligence")
 
-df_sheet = load_sheet()
-
-df_sheet["hotel"] = df_sheet["hotel"].astype(str).str.strip()
-df_sheet["type"] = df_sheet["type"].astype(str).str.strip().str.lower()
-
-self_list = df_sheet[df_sheet["type"] == "self"]["hotel"].unique().tolist()
-competitors = df_sheet[df_sheet["type"] != "self"]["hotel"].unique().tolist()
+df = load_sheet()
 
 
-# ── SELF HOTELS (MULTI)
-self_hotels = st.multiselect(
-    "Self hotels",
-    self_list,
-    default=self_list
+# ─────────────────────────────
+# SELECT CLUSTER BY NUMBER
+# ─────────────────────────────
+clusters = df[["number", "hotel"]].dropna().drop_duplicates()
+
+cluster_map = {
+    int(n): df[df["number"] == n]["hotel"].tolist()
+    for n in clusters["number"].unique()
+}
+
+selected_number = st.selectbox(
+    "Select cluster (number)",
+    sorted(cluster_map.keys())
 )
 
+self_hotel = cluster_map[selected_number][0]
+competitors = cluster_map[selected_number]
 
-# ── DATE
+
+st.markdown(f"""
+### Selected cluster: {selected_number}
+**Self hotel:** {self_hotel}
+**Included objects:** {len(competitors)}
+""")
+
+
+# ─────────────────────────────
+# DATE INPUT
+# ─────────────────────────────
 checkin = st.date_input("Check-in", date.today() + timedelta(days=14))
 checkout = st.date_input("Check-out", checkin + timedelta(days=7))
 
-
-run = st.button("Fetch Prices")
+run = st.button("Fetch prices")
 
 
 # ─────────────────────────────
@@ -110,53 +112,53 @@ if run:
 
     results = []
 
-    targets = self_hotels + competitors
+    for hotel in competitors:
 
-    for hotel in targets:
-
-        data = fetch(checkin, checkout, 2, hotel)
+        data = fetch_prices(checkin, checkout, 2, hotel)
 
         if not data:
             continue
 
-        df = pd.DataFrame(data)
+        df_live = pd.DataFrame(data)
 
-        df["is_self"] = df["hotel"].isin(self_hotels)
+        df_live["cluster"] = selected_number
+        df_live["source_hotel"] = self_hotel
+        df_live["is_self"] = df_live["hotel"] == self_hotel
 
-        results.append(df)
+        results.append(df_live)
 
     if not results:
-        st.error("No data")
+        st.error("No data returned from Apify")
         st.stop()
 
-    df = pd.concat(results)
+    final = pd.concat(results)
 
     # ─────────────────────────────
-    # SELF BASELINE (INDEX)
+    # SORT: SELF FIRST, THEN PRICE DESC
     # ─────────────────────────────
-    self_avg = df[df["is_self"]]["price"].mean()
-
-    df["price_index"] = (df["price"] / self_avg * 100).round(1)
-
-    df["vs_self"] = (df["price"] - self_avg).round(0)
+    final = final.sort_values(["is_self", "price"], ascending=[False, False])
 
     # ─────────────────────────────
-    # SORT
+    # SELF BASELINE INDEX
     # ─────────────────────────────
-    df = df.sort_values(["is_self", "price"], ascending=[False, False])
+    self_avg = final[final["is_self"]]["price"].mean()
+
+    final["price_index"] = (final["price"] / self_avg * 100).round(1)
+    final["vs_self"] = (final["price"] - self_avg).round(0)
+
 
     # ─────────────────────────────
     # OUTPUT
     # ─────────────────────────────
-    st.subheader("Pricing Index (SELF = 100%)")
+    st.subheader("Cluster comparison")
 
-    st.metric("Self avg price", f"€{self_avg:.0f}")
+    st.metric("Self average price", f"€{self_avg:.0f}")
 
     st.divider()
 
-    for hotel in df["hotel"].unique():
+    for hotel in final["hotel"].unique():
 
-        sub = df[df["hotel"] == hotel]
+        sub = final[final["hotel"] == hotel]
 
         st.markdown(f"## 🏨 {hotel}")
 
@@ -169,12 +171,12 @@ if run:
 
 💰 €{r['price']:,.0f}  
 🛏 €{r['per_night']:,.0f} / night  
-🍽 {r['board'].upper()}  
-📊 Index: {r['price_index']} (100 = self)  
+📊 Index: {r['price_index']}  
 📈 vs Self: {r['vs_self']:+.0f} €
+
 ---
 """)
 
 else:
-    st.info("Select dates + self hotels")
+    st.info("Select cluster and dates")
 
