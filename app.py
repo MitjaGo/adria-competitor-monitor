@@ -72,14 +72,15 @@ def _get_apify_token():
         pass
     return os.getenv("APIFY_TOKEN")
 
+# FIXED: Added leading underscore to _progress_element to exclude it from hash calculations
 @st.cache_data(ttl=3600, show_spinner=False)
-def scrape_booking_prices(checkin: date, checkout: date, adults: int, dest: str, progress_element=None) -> list[dict]:
+def scrape_booking_prices(checkin: date, checkout: date, adults: int, dest: str, _progress_element=None) -> list[dict]:
     token = _get_apify_token()
     
     if token:
         try:
-            if progress_element:
-                progress_element.markdown(f"📡 **System Status:** Connecting to Apify API hub (Querying {adults} Adults dynamic tier)...")
+            if _progress_element:
+                _progress_element.markdown(f"📡 **System Status:** Connecting to Apify API hub (Querying {adults} Adults dynamic tier)...")
             
             from apify_client import ApifyClient
             client = ApifyClient(token)
@@ -97,27 +98,26 @@ def scrape_booking_prices(checkin: date, checkout: date, adults: int, dest: str,
                 "sortBy": "popularity",
             }
             
-            if progress_element:
-                progress_element.markdown(f"🤖 **System Status:** Launching `automation-lab/booking-scraper` payload container for {adults} adults...")
+            if _progress_element:
+                _progress_element.markdown(f"🤖 **System Status:** Launching `automation-lab/booking-scraper` payload container for {adults} adults...")
                 
             run = client.actor("automation-lab/booking-scraper").call(
                 run_input=run_input, 
                 timeout=timedelta(seconds=180)
             )
             
-            if progress_element:
-                progress_element.markdown(f"📥 **System Status:** Extracting data table dictionary from Apify Dataset key `{run['defaultDatasetId'][:8]}...`")
+            if _progress_element:
+                _progress_element.markdown(f"📥 **System Status:** Extracting data table dictionary from Apify Dataset key `{run['defaultDatasetId'][:8]}...`")
                 
             raw = list(client.dataset(run["defaultDatasetId"]).iterate_items())
 
-            # If Apify returns an empty dataset due to anti-bot blocks, trigger fallback directly
             if not raw:
-                if progress_element:
-                    progress_element.markdown("⚠️ **System Status:** Apify worker returned 0 targets due to access filtering. Activating simulation layer...")
+                if _progress_element:
+                    _progress_element.markdown("⚠️ **System Status:** Apify worker returned 0 targets due to access filtering. Activating simulation layer...")
                 return _demo_data(checkin, checkout, adults)
 
-            if progress_element:
-                progress_element.markdown(f"⚙️ **System Status:** Normalizing pricing arrays and identifying internal property variables...")
+            if _progress_element:
+                _progress_element.markdown(f"⚙️ **System Status:** Normalizing pricing arrays and identifying internal property variables...")
 
             results = []
             for h in raw:
@@ -142,8 +142,8 @@ def scrape_booking_prices(checkin: date, checkout: date, adults: int, dest: str,
         except Exception as e:
             st.sidebar.error(f"Apify Connection Refused: {str(e)}")
             
-    if progress_element:
-        progress_element.markdown(f"⚠️ **System Status:** No API connectivity. Falling back to local algorithmic math engine for {adults} adults...")
+    if _progress_element:
+        _progress_element.markdown(f"⚠️ **System Status:** No API connectivity. Falling back to local algorithmic math engine for {adults} adults...")
         time.sleep(0.8)
         
     return _demo_data(checkin, checkout, adults)
@@ -207,7 +207,7 @@ with st.sidebar:
     st.divider()
     st.markdown("**Guests per room**")
     show_2 = st.checkbox("2 adults", value=True)
-    show_3 = st.checkbox("3 adults", value=False) # Switched default configurations to 1 tier for maximum stability
+    show_3 = st.checkbox("3 adults", value=False) 
     show_4 = st.checkbox("4 adults", value=False)
 
     st.divider()
@@ -269,17 +269,16 @@ if st.session_state.df_data is None:
         current_pct = i / len(adult_counts)
         progress_bar.progress(current_pct)
         
-        # FIXED: Modified query parameter string matching Booking.com's signature precisely
+        # FIXED: Named explicitly with an underscore inside the call to prevent Streamlit hashing
         rows = scrape_booking_prices(
             checkin, 
             checkout, 
             adults, 
             "Ankaran, Slovenian Istria, Slovenia", 
-            progress_element=message_container
+            _progress_element=message_container
         )
         all_data.extend(rows)
         
-        # FIXED: Structural cooldown buffer prevents proxy flagging during sequence queries
         if len(adult_counts) > 1 and i < len(adult_counts) - 1:
             message_container.markdown("⏳ **System Status:** Cool-down padding active. Cooling proxies before next tier call...")
             time.sleep(5)
