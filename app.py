@@ -103,7 +103,8 @@ def _apify_scrape(checkin: date, checkout: date, adults: int,
         run_input=run_input,
     )
 
-    raw = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+    dataset_id = run.default_dataset_id
+    raw = list(client.dataset(dataset_id).iterate_items())
 
     results = []
     for h in raw:
