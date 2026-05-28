@@ -6,46 +6,42 @@ from apify_client import ApifyClient
 # ─────────────────────────────────────────
 # CONFIG
 # ─────────────────────────────────────────
-st.set_page_config(page_title="Cluster Hotel Dashboard", layout="wide")
+SHEET_URL = "https://docs.google.com/spreadsheets/d/1at8Qo7Ne28Fb43WfhoXN0IpRBnwmenfgCVRZytTEGDA/export?format=csv&gid=1313360174"
 
-SHEET_ID = "1at8Qo7Ne28Fb43WfhoXN0IpRBnwmenfgCVRZytTEGDA"
-SHEET_GID = "1313360174"
-
-SHEET_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid={SHEET_GID}"
-
+CLUSTER_MAP = {
+    1: "Hotel Convent",
+    2: "Vile brez balkona"
+}
 
 # ─────────────────────────────────────────
-# LOAD GOOGLE SHEET
+# LOAD SHEET
 # ─────────────────────────────────────────
 @st.cache_data
 def load_sheet():
     df = pd.read_csv(SHEET_URL)
-
-    # clean columns
     df.columns = df.columns.str.strip().str.lower()
 
-    # clean number column (IMPORTANT FIX)
+    # CLEAN NUMBER COLUMN (CRITICAL FIX)
     df["number"] = (
         df["number"]
         .astype(str)
         .str.strip()
+        .str.replace(r"\.0$", "", regex=True)
     )
 
     df["number"] = pd.to_numeric(df["number"], errors="coerce")
+
+    # MAP NUMBER → NAME (IMPORTANT FIX)
+    df["cluster"] = df["number"].map(CLUSTER_MAP)
 
     return df
 
 
 # ─────────────────────────────────────────
-# APIFY SCRAPER
+# APIFY
 # ─────────────────────────────────────────
 def scrape_apify(urls, checkin, checkout, adults):
-    token = st.secrets.get("APIFY_TOKEN")
-    if not token:
-        st.error("Missing APIFY token")
-        return []
-
-    client = ApifyClient(token)
+    client = ApifyClient(st.secrets["APIFY_TOKEN"])
 
     run = client.actor("pAk2GX3uArJTHBc9g").call({
         "startUrls": [{"url": u} for u in urls],
@@ -56,8 +52,7 @@ def scrape_apify(urls, checkin, checkout, adults):
         "language": "en-us",
     })
 
-    dataset_id = run.get("defaultDatasetId") or getattr(run, "default_dataset_id", None)
-
+    dataset_id = run.get("defaultDatasetId")
     if not dataset_id:
         return []
 
@@ -67,72 +62,68 @@ def scrape_apify(urls, checkin, checkout, adults):
 # ─────────────────────────────────────────
 # UI
 # ─────────────────────────────────────────
-st.title("🏨 Cluster Hotel Price Dashboard")
+st.title("🏨 Multi Cluster Hotel Dashboard")
 
 df = load_sheet()
 
-# safety check
-if "number" not in df.columns:
-    st.error("Sheet must contain 'number' column")
-    st.stop()
+# REMOVE BAD ROWS
+df = df.dropna(subset=["cluster"])
 
-# cluster selector
-cluster_map = {
-    "Hotel Convent": 1,
-    "Vile brez balkona": 2
-}
+# ─────────────────────────────
+# SELECT CLUSTER (NOW BY NAME)
+# ─────────────────────────────
+cluster_name = st.selectbox(
+    "Select hotel cluster",
+    df["cluster"].unique().tolist()
+)
 
-cluster_name = st.selectbox("Select cluster", list(cluster_map.keys()))
-cluster_id = cluster_map[cluster_name]
+filtered = df[df["cluster"] == cluster_name]
 
-filtered = df[df["number"] == cluster_id]
-
-st.subheader("Cluster hotels")
-if filtered.empty:
-    st.warning("No hotels in this cluster (check Google Sheet numbers)")
-    st.stop()
-
+st.subheader(f"Selected: {cluster_name}")
 st.dataframe(filtered)
 
-# dates
+# ─────────────────────────────
+# DATES
+# ─────────────────────────────
 today = date.today()
 checkin = st.date_input("Check-in", today + timedelta(days=14))
 checkout = st.date_input("Check-out", today + timedelta(days=21))
 adults = st.selectbox("Adults", [2, 3, 4, 5, 6])
 
-# fetch
+# ─────────────────────────────
+# FETCH
+# ─────────────────────────────
 if st.button("Fetch prices"):
 
     urls = filtered["url"].dropna().tolist()
 
-    if len(urls) == 0:
+    if not urls:
         st.error("No URLs in selected cluster")
         st.stop()
 
-    with st.spinner("Fetching Apify..."):
+    with st.spinner("Fetching Apify data..."):
         data = scrape_apify(urls, checkin, checkout, adults)
 
     if not data:
-        st.error("No data returned from Apify")
+        st.error("No data from Apify")
         st.stop()
 
     dfp = pd.DataFrame(data)
 
-    # safe price parsing
     dfp["price"] = pd.to_numeric(dfp.get("price", 0), errors="coerce").fillna(0)
 
-    # sort high → low (IMPORTANT REQUEST)
+    # SORT HIGH → LOW (your requirement)
     dfp = dfp.sort_values("price", ascending=False)
 
     st.subheader("💰 Prices (High → Low)")
     st.dataframe(dfp[["name", "price"]])
 
-    # self hotel detection
+    # SELF DETECTION
     dfp["is_self"] = dfp["name"].str.lower().str.contains("adria")
 
     if dfp["is_self"].any():
         self_price = dfp[dfp["is_self"]]["price"].mean()
-        dfp["index_vs_self_%"] = ((dfp["price"] - self_price) / self_price) * 100
+        dfp["price_index_%"] = ((dfp["price"] - self_price) / self_price) * 100
 
-        st.subheader("📊 Price Index vs Self Hotel")
-        st.dataframe(dfp[["name", "price", "index_vs_self_%"]])
+        st.subheader("📊 Price Index vs Self")
+        st.dataframe(dfp[["name", "price", "price_index_%"]])
