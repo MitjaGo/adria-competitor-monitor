@@ -33,42 +33,46 @@ def load_sheet(cluster):
 # ─────────────────────────────
 # APIFY (STABLE)
 # ─────────────────────────────
-def scrape_apify(client, urls, checkin, checkout, adults):
+def scrape(client, urls, checkin, checkout, adults):
 
-    try:
-        run = client.actor("pAk2GX3uArJTHBc9g").call(
-            run_input={
-                "startUrls": [{"url": u} for u in urls],
-                "checkin": checkin.strftime("%Y-%m-%d"),
-                "checkout": checkout.strftime("%Y-%m-%d"),
-                "adults": adults,
-                "rooms": 1,
-                "currency": "EUR",
-                "language": "en-us",
-                "maxResults": 20,
-            }
-        )
-    except Exception as e:
-        st.error(f"Apify error: {e}")
-        return []
+    run = client.actor("pAk2GX3uArJTHBc9g").call({
+        "startUrls": [{"url": u} for u in urls],
+        "checkin": str(checkin),
+        "checkout": str(checkout),
+        "adults": adults,
+        "rooms": 1,
+        "currency": "EUR",
+        "language": "en-us",
+        "maxResults": 20
+    })
 
-    dataset_id = (
-        run.get("defaultDatasetId")
-        if isinstance(run, dict)
-        else getattr(run, "defaultDatasetId", None)
-    )
+    # ─────────────────────────────
+    # SAFE dataset extraction
+    # ─────────────────────────────
+    dataset_id = None
+
+    # new apify-client style (BEST)
+    if hasattr(run, "default_dataset_id"):
+        dataset_id = run.default_dataset_id
+
+    # fallback (most common)
+    if not dataset_id and hasattr(run, "defaultDatasetId"):
+        dataset_id = run.defaultDatasetId
+
+    # dict fallback
+    if not dataset_id:
+        try:
+            dataset_id = run.get("defaultDatasetId")
+        except:
+            pass
 
     if not dataset_id:
-        st.warning("No dataset returned from Apify")
+        st.error(f"Apify run failed or no dataset created: {run}")
         return []
 
     dataset = client.dataset(dataset_id)
 
-    items = []
-    for _ in range(20):
-        items = list(dataset.iterate_items())
-        if items:
-            break
+    items = list(dataset.iterate_items())
 
     return items
 
