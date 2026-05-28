@@ -4,9 +4,9 @@ from datetime import date, timedelta
 import time
 from apify_client import ApifyClient
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # CONFIG
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 
 st.set_page_config(
     page_title="Adria Ankaran – Competitor Monitor",
@@ -14,9 +14,9 @@ st.set_page_config(
     layout="wide",
 )
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # HELPERS
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 
 def get_apify_token():
     import os
@@ -65,9 +65,9 @@ def normalize_region(region: str) -> str:
     return "Other"
 
 
-# ─────────────────────────────────────────────────────────────
-# APIFY SCRAPER
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# APIFY SCRAPER (ROBUST)
+# ─────────────────────────────────────────────
 
 def scrape_booking(checkin, checkout, adults, location="Ankaran, Slovenia"):
 
@@ -93,36 +93,37 @@ def scrape_booking(checkin, checkout, adults, location="Ankaran, Slovenia"):
         "sortBy": "popularity",
     }
 
-    with st.spinner(f"Fetching Apify data ({adults} adults) ..."):
+    with st.spinner("Fetching Apify data..."):
 
+        # START ACTOR
         run = client.actor("automation-lab/booking-scraper").call(run_input=run_input)
 
-        dataset_id = (
-            getattr(run, "defaultDatasetId", None)
-            or run.get("defaultDatasetId")
-        )
+        # SAFE dataset ID extraction (FIX FOR YOUR ERROR)
+        dataset_id = getattr(run, "defaultDatasetId", None)
 
         if not dataset_id:
-            st.error("No dataset returned from Apify")
-            return []
+            st.error("Apify did not return datasetId")
+            st.stop()
 
         dataset = client.dataset(dataset_id)
 
+        # WAIT FOR DATA (ROBUST)
         raw = []
         for _ in range(30):
             raw = list(dataset.iterate_items())
-            if raw:
+            if len(raw) > 0:
                 break
-            time.sleep(1.2)
+            time.sleep(1.5)
 
     if not raw:
-        st.warning("No results from Apify")
+        st.warning("No data returned from Apify")
         return []
 
     results = []
 
     for h in raw:
 
+        # NAME
         name = (
             h.get("name")
             or h.get("hotelName")
@@ -130,10 +131,12 @@ def scrape_booking(checkin, checkout, adults, location="Ankaran, Slovenia"):
             or "Unknown"
         )
 
+        # PRICE
         price = (
             h.get("price")
             or h.get("priceAmount")
             or h.get("totalPrice")
+            or h.get("amount")
             or 0
         )
 
@@ -142,29 +145,41 @@ def scrape_booking(checkin, checkout, adults, location="Ankaran, Slovenia"):
         except:
             price = 0
 
+        # STARS
         stars = h.get("starRating") or h.get("stars") or 0
         try:
             stars = int(float(stars))
         except:
             stars = 0
 
+        # RATING
         rating = h.get("reviewScore") or h.get("rating") or 0
         try:
             rating = float(rating)
         except:
             rating = 0
 
+        # REGION
         region_raw = h.get("location") or h.get("address") or location
         region = normalize_region(region_raw)
 
+        # URL
         booking_url = h.get("url") or h.get("hotelUrl") or ""
 
-        room_text = h.get("roomType") or h.get("mealPlan") or h.get("description") or name
+        # ROOM TYPE
+        room_text = (
+            h.get("roomType")
+            or h.get("mealPlan")
+            or h.get("description")
+            or name
+        )
+
         room_type = detect_room_type(room_text)
 
-        per_night = round(price / nights, 2)
-
+        # SELF DETECT
         is_self = "adria" in name.lower()
+
+        per_night = round(price / nights, 2)
 
         results.append({
             "name": name,
@@ -181,14 +196,13 @@ def scrape_booking(checkin, checkout, adults, location="Ankaran, Slovenia"):
     return results
 
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # UI
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 
 st.title("🌊 Adria Ankaran – Competitor Monitor")
 
 today = date.today()
-
 default_in = today + timedelta(days=14)
 default_out = default_in + timedelta(days=7)
 
@@ -203,7 +217,7 @@ with st.sidebar:
 
     stars_filter = st.slider("Min stars", 0, 5, 0)
 
-    token = st.text_input("Apify token", type="password")
+    token = st.text_input("Apify Token", type="password")
 
     if token:
         import os
@@ -212,9 +226,9 @@ with st.sidebar:
     fetch = st.button("Fetch Prices")
 
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 # RUN
-# ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
 
 if fetch:
 
@@ -225,14 +239,21 @@ if fetch:
 
     df = pd.DataFrame(data)
 
+    # CLEAN
     df["price_eur"] = pd.to_numeric(df["price_eur"], errors="coerce").fillna(0)
     df["stars"] = pd.to_numeric(df["stars"], errors="coerce").fillna(0)
 
+    # FILTER
     df = df[df["stars"] >= stars_filter]
 
-    # SORT: HIGH → LOW
+    if df.empty:
+        st.warning("No results after filters")
+        st.stop()
+
+    # SORT (HIGH → LOW)
     df = df.sort_values("price_eur", ascending=False)
 
+    # KPIs
     st.subheader("Overview")
 
     c1, c2, c3 = st.columns(3)
@@ -243,6 +264,7 @@ if fetch:
 
     st.divider()
 
+    # CARDS
     st.subheader("Hotels")
 
     for _, r in df.iterrows():
@@ -260,23 +282,12 @@ if fetch:
 ## €{r['price_eur']:,.0f}
 €{r['per_night']:,.0f} / night
 
-[Open]({r['booking_url']})
+[Open Booking]({r['booking_url']})
         """)
 
         st.divider()
 
-    st.subheader("Table")
-
     st.dataframe(df, use_container_width=True)
-
-    csv = df.to_csv(index=False).encode("utf-8")
-
-    st.download_button(
-        "Download CSV",
-        csv,
-        "booking_prices.csv",
-        "text/csv"
-    )
 
 else:
     st.info("Select dates and click Fetch Prices.")
