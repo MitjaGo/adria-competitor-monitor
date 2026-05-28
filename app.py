@@ -5,7 +5,7 @@ from apify_client import ApifyClient
 
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1at8Qo7Ne28Fb43WfhoXN0IpRBnwmenfgCVRZytTEGDA/export?format=csv"
 
-st.set_page_config(page_title="Hotel Monitor", layout="wide")
+st.set_page_config(page_title="Hotel Pricing Intelligence", layout="wide")
 
 
 # ─────────────────────────────
@@ -21,9 +21,8 @@ def load_sheet():
 # ─────────────────────────────
 # APIFY
 # ─────────────────────────────
-def fetch_prices(checkin, checkout, adults, location):
+def fetch(checkin, checkout, adults, location):
     token = st.secrets.get("APIFY_TOKEN")
-
     if not token:
         return []
 
@@ -49,16 +48,26 @@ def fetch_prices(checkin, checkout, adults, location):
     out = []
 
     for h in items:
+        name = (h.get("name") or "").lower()
         price = float(h.get("price") or 0)
 
         if price <= 0:
             continue
 
+        # ── BOARD TYPE DETECTION ──
+        board = "rental"
+
+        if "half" in name or "hb" in name:
+            board = "halfboard"
+        elif "breakfast" in name or "bb" in name:
+            board = "bb"
+
         out.append({
             "hotel": h.get("name"),
             "adults": adults,
             "price": price,
-            "per_night": round(price / nights, 2)
+            "per_night": round(price / nights, 2),
+            "board": board
         })
 
     return out
@@ -67,32 +76,31 @@ def fetch_prices(checkin, checkout, adults, location):
 # ─────────────────────────────
 # UI
 # ─────────────────────────────
-st.title("🏨 Competitor Intelligence")
+st.title("🏨 Pricing Intelligence Engine")
 
 df_sheet = load_sheet()
 
-# CLEAN
 df_sheet["hotel"] = df_sheet["hotel"].astype(str).str.strip()
 df_sheet["type"] = df_sheet["type"].astype(str).str.strip().str.lower()
 
 self_list = df_sheet[df_sheet["type"] == "self"]["hotel"].unique().tolist()
-comp_list = df_sheet[df_sheet["type"] != "self"]["hotel"].unique().tolist()
-
-# SELF SELECT
-self_hotel = st.selectbox("Select SELF hotel", self_list)
-
-# filter competitors based on sheet relationships
-competitors = df_sheet[df_sheet["hotel"] == self_hotel]["competitors"] if "competitors" in df_sheet.columns else df_sheet
-
-# fallback: all non-self
-competitors = df_sheet[df_sheet["type"] != "self"]["hotel"].tolist()
+competitors = df_sheet[df_sheet["type"] != "self"]["hotel"].unique().tolist()
 
 
-# DATE
+# ── SELF HOTELS (MULTI)
+self_hotels = st.multiselect(
+    "Self hotels",
+    self_list,
+    default=self_list
+)
+
+
+# ── DATE
 checkin = st.date_input("Check-in", date.today() + timedelta(days=14))
 checkout = st.date_input("Check-out", checkin + timedelta(days=7))
 
-run = st.button("Fetch")
+
+run = st.button("Fetch Prices")
 
 
 # ─────────────────────────────
@@ -102,22 +110,18 @@ if run:
 
     results = []
 
-    # SELF + COMPETITORS ONLY
-    targets = [self_hotel] + competitors
+    targets = self_hotels + competitors
 
     for hotel in targets:
 
-        data = fetch_prices(checkin, checkout, 2, hotel)
+        data = fetch(checkin, checkout, 2, hotel)
 
         if not data:
             continue
 
         df = pd.DataFrame(data)
 
-        df["is_self"] = df["hotel"] == self_hotel
-
-        # SORT: SELF FIRST, then price desc
-        df = df.sort_values(["is_self", "price"], ascending=[False, False])
+        df["is_self"] = df["hotel"].isin(self_hotels)
 
         results.append(df)
 
@@ -125,38 +129,52 @@ if run:
         st.error("No data")
         st.stop()
 
-    final = pd.concat(results)
-
-    # ORDER: SELF FIRST
-    final["priority"] = final["hotel"].apply(lambda x: 0 if x == self_hotel else 1)
-    final = final.sort_values(["priority", "price"], ascending=[True, False])
-
+    df = pd.concat(results)
 
     # ─────────────────────────────
-    # DISPLAY ONLY AVAILABLE PERSON COUNTS
+    # SELF BASELINE (INDEX)
     # ─────────────────────────────
-    st.subheader("Results")
+    self_avg = df[df["is_self"]]["price"].mean()
 
-    for hotel in final["hotel"].unique():
+    df["price_index"] = (df["price"] / self_avg * 100).round(1)
 
-        sub = final[final["hotel"] == hotel]
+    df["vs_self"] = (df["price"] - self_avg).round(0)
 
-        st.markdown(f"## {hotel}")
+    # ─────────────────────────────
+    # SORT
+    # ─────────────────────────────
+    df = df.sort_values(["is_self", "price"], ascending=[False, False])
+
+    # ─────────────────────────────
+    # OUTPUT
+    # ─────────────────────────────
+    st.subheader("Pricing Index (SELF = 100%)")
+
+    st.metric("Self avg price", f"€{self_avg:.0f}")
+
+    st.divider()
+
+    for hotel in df["hotel"].unique():
+
+        sub = df[df["hotel"] == hotel]
+
+        st.markdown(f"## 🏨 {hotel}")
 
         for _, r in sub.iterrows():
 
-            # show ONLY if price exists
-            if pd.isna(r["price"]) or r["price"] <= 0:
-                continue
-
-            label = "SELF" if hotel == self_hotel else "COMPETITOR"
+            tag = "SELF" if r["is_self"] else "COMPETITOR"
 
             st.write(f"""
-**{label}**  
+**{tag}**
+
 💰 €{r['price']:,.0f}  
 🛏 €{r['per_night']:,.0f} / night  
----""")
+🍽 {r['board'].upper()}  
+📊 Index: {r['price_index']} (100 = self)  
+📈 vs Self: {r['vs_self']:+.0f} €
+---
+""")
 
 else:
-    st.info("Select dates and SELF hotel")
+    st.info("Select dates + self hotels")
 
