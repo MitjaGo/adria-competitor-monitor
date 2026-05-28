@@ -1,294 +1,104 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
-import time
 from apify_client import ApifyClient
 
-# ─────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────
-
-st.set_page_config(
-    page_title="Adria Ankaran – Competitor Monitor",
-    page_icon="🌊",
-    layout="wide",
-)
-
-# ─────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────
-
-def get_apify_token():
-    import os
-    try:
-        return st.secrets.get("APIFY_TOKEN") or os.getenv("APIFY_TOKEN")
-    except:
-        return os.getenv("APIFY_TOKEN")
+SHEET = "https://docs.google.com/spreadsheets/d/1at8Qo7Ne28Fb43WfhoXN0IpRBnwmenfgCVRZytTEGDA/export?format=csv"
 
 
-def detect_room_type(text: str) -> str:
-    t = (text or "").lower()
-
-    if any(x in t for x in ["half board", "hb"]):
-        return "Half Board"
-
-    if any(x in t for x in ["bed and breakfast", "b&b", "breakfast included", "breakfast"]):
-        return "Bed & Breakfast"
-
-    if any(x in t for x in ["apartment", "studio", "kitchen", "kitchenette"]):
-        return "Rental / Apartment"
-
-    return "Room only"
+@st.cache_data(ttl=600)
+def load():
+    return pd.read_csv(SHEET).dropna()
 
 
-def normalize_region(region: str) -> str:
-    if not region:
-        return "Other"
-
-    r = region.lower()
-
-    if "ankaran" in r:
-        return "SI – Ankaran"
-    if "portoro" in r:
-        return "SI – Portorož"
-    if "piran" in r:
-        return "SI – Piran"
-    if "rovinj" in r:
-        return "HR – Rovinj"
-    if "pore" in r:
-        return "HR – Poreč"
-    if "zadar" in r:
-        return "HR – Zadar"
-    if "split" in r:
-        return "HR – Split"
-
-    return "Other"
+def token():
+    return st.secrets.get("APIFY_TOKEN") or st.text_input("APIFY token", type="password")
 
 
-# ─────────────────────────────────────────────
-# APIFY SCRAPER (ROBUST)
-# ─────────────────────────────────────────────
+def scrape(client, name, location, checkin, checkout, adults):
 
-def scrape_booking(checkin, checkout, adults, location="Ankaran, Slovenia"):
-
-    token = get_apify_token()
-
-    if not token:
-        st.error("Missing APIFY token")
-        return []
-
-    client = ApifyClient(token)
-
-    nights = max((checkout - checkin).days, 1)
-
-    run_input = {
+    run = client.actor("automation-lab/booking-scraper").call({
         "locationQuery": location,
-        "checkin": checkin.strftime("%Y-%m-%d"),
-        "checkout": checkout.strftime("%Y-%m-%d"),
+        "checkin": checkin,
+        "checkout": checkout,
         "adults": adults,
         "rooms": 1,
         "currency": "EUR",
-        "language": "en-us",
-        "maxResults": 30,
-        "sortBy": "popularity",
-    }
+        "maxResults": 25
+    })
 
-    with st.spinner("Fetching Apify data..."):
+    dataset = client.dataset(getattr(run, "defaultDatasetId"))
+    items = list(dataset.iterate_items())
 
-        # START ACTOR
-        run = client.actor("automation-lab/booking-scraper").call(run_input=run_input)
+    out = []
 
-        # SAFE dataset ID extraction (FIX FOR YOUR ERROR)
-        dataset_id = getattr(run, "defaultDatasetId", None)
-
-        if not dataset_id:
-            st.error("Apify did not return datasetId")
-            st.stop()
-
-        dataset = client.dataset(dataset_id)
-
-        # WAIT FOR DATA (ROBUST)
-        raw = []
-        for _ in range(30):
-            raw = list(dataset.iterate_items())
-            if len(raw) > 0:
-                break
-            time.sleep(1.5)
-
-    if not raw:
-        st.warning("No data returned from Apify")
-        return []
-
-    results = []
-
-    for h in raw:
-
-        # NAME
-        name = (
-            h.get("name")
-            or h.get("hotelName")
-            or h.get("title")
-            or "Unknown"
-        )
-
-        # PRICE
-        price = (
-            h.get("price")
-            or h.get("priceAmount")
-            or h.get("totalPrice")
-            or h.get("amount")
-            or 0
-        )
-
+    for i in items:
+        price = i.get("price") or 0
         try:
             price = float(price)
         except:
-            price = 0
+            continue
 
-        # STARS
-        stars = h.get("starRating") or h.get("stars") or 0
-        try:
-            stars = int(float(stars))
-        except:
-            stars = 0
+        if price <= 0:
+            continue
 
-        # RATING
-        rating = h.get("reviewScore") or h.get("rating") or 0
-        try:
-            rating = float(rating)
-        except:
-            rating = 0
-
-        # REGION
-        region_raw = h.get("location") or h.get("address") or location
-        region = normalize_region(region_raw)
-
-        # URL
-        booking_url = h.get("url") or h.get("hotelUrl") or ""
-
-        # ROOM TYPE
-        room_text = (
-            h.get("roomType")
-            or h.get("mealPlan")
-            or h.get("description")
-            or name
-        )
-
-        room_type = detect_room_type(room_text)
-
-        # SELF DETECT
-        is_self = "adria" in name.lower()
-
-        per_night = round(price / nights, 2)
-
-        results.append({
-            "name": name,
-            "region": region,
-            "stars": stars,
-            "rating": rating,
-            "price_eur": price,
-            "per_night": per_night,
-            "room_type": room_type,
-            "is_self": is_self,
-            "booking_url": booking_url,
+        out.append({
+            "hotel": name,
+            "price": price,
         })
 
-    return results
+    return out
 
 
-# ─────────────────────────────────────────────
-# UI
-# ─────────────────────────────────────────────
+st.title("🏨 Hotel Pricing")
 
-st.title("🌊 Adria Ankaran – Competitor Monitor")
+df = load()
 
-today = date.today()
-default_in = today + timedelta(days=14)
-default_out = default_in + timedelta(days=7)
+checkin = st.date_input("Check-in", date.today() + timedelta(days=14))
+checkout = st.date_input("Check-out", checkin + timedelta(days=7))
+adults = st.selectbox("Adults", [2, 3, 4], 0)
 
-with st.sidebar:
+if st.button("Fetch"):
 
-    st.header("Search")
+    client = ApifyClient(token())
 
-    checkin = st.date_input("Check-in", default_in, min_value=today)
-    checkout = st.date_input("Check-out", default_out, min_value=checkin + timedelta(days=1))
-
-    adults = st.selectbox("Adults", [2, 3, 4], index=0)
-
-    stars_filter = st.slider("Min stars", 0, 5, 0)
-
-    token = st.text_input("Apify Token", type="password")
-
-    if token:
-        import os
-        os.environ["APIFY_TOKEN"] = token
-
-    fetch = st.button("Fetch Prices")
-
-
-# ─────────────────────────────────────────────
-# RUN
-# ─────────────────────────────────────────────
-
-if fetch:
-
-    data = scrape_booking(checkin, checkout, adults)
-
-    if not data:
-        st.stop()
-
-    df = pd.DataFrame(data)
-
-    # CLEAN
-    df["price_eur"] = pd.to_numeric(df["price_eur"], errors="coerce").fillna(0)
-    df["stars"] = pd.to_numeric(df["stars"], errors="coerce").fillna(0)
-
-    # FILTER
-    df = df[df["stars"] >= stars_filter]
-
-    if df.empty:
-        st.warning("No results after filters")
-        st.stop()
-
-    # SORT (HIGH → LOW)
-    df = df.sort_values("price_eur", ascending=False)
-
-    # KPIs
-    st.subheader("Overview")
-
-    c1, c2, c3 = st.columns(3)
-
-    c1.metric("Hotels", len(df))
-    c2.metric("Avg price", f"€{df['price_eur'].mean():.0f}")
-    c3.metric("Cheapest", f"€{df['price_eur'].min():.0f}")
-
-    st.divider()
-
-    # CARDS
-    st.subheader("Hotels")
+    results = []
 
     for _, r in df.iterrows():
 
-        badge = "🌊 ADRIA" if r["is_self"] else "🏨 COMPETITOR"
+        data = scrape(
+            client,
+            r["name"],
+            r["location"],
+            checkin.strftime("%Y-%m-%d"),
+            checkout.strftime("%Y-%m-%d"),
+            adults
+        )
 
+        for d in data:
+            d["type"] = r["type"]
+            d["url"] = r.get("url", "")
+
+        results.extend(data)
+
+    df = pd.DataFrame(results)
+
+    if df.empty:
+        st.warning("No data")
+        st.stop()
+
+    # SORT HIGH → LOW
+    df = df.sort_values("price", ascending=False)
+
+    st.subheader("Prices (High → Low)")
+
+    for _, r in df.iterrows():
         st.markdown(f"""
-### {r['name']}
+### {r['hotel']}
 
-{badge}  
-📍 {r['region']}  
-⭐ {r['stars']} | ⭐ {r['rating']}  
-🏷️ {r['room_type']}
+🏷️ {r['type']}  
+## €{r['price']:,.0f}
+""")
 
-## €{r['price_eur']:,.0f}
-€{r['per_night']:,.0f} / night
-
-[Open Booking]({r['booking_url']})
-        """)
-
-        st.divider()
-
-    st.dataframe(df, use_container_width=True)
-
-else:
-    st.info("Select dates and click Fetch Prices.")
+    st.dataframe(df)
 
