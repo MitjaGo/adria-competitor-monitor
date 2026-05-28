@@ -11,40 +11,36 @@ SHEET_URL = "https://docs.google.com/spreadsheets/d/1at8Qo7Ne28Fb43WfhoXN0IpRBnw
 # ─────────────────────────────
 
 @st.cache_data(ttl=600)
-def load_hotels():
-    df = pd.read_csv(SHEET_URL)
-    return df.dropna()
+def load():
+    return pd.read_csv(SHEET_URL)
 
 
-def get_token():
+def token():
     return st.secrets.get("APIFY_TOKEN") or st.text_input("APIFY token", type="password")
 
 
 # ─────────────────────────────
-# ROOM TYPE DETECTOR
+# ROOM FILTER (BB / HB / RENTAL)
 # ─────────────────────────────
 
-def detect_room(text: str):
-
+def room_type(text: str):
     t = (text or "").lower()
 
-    if "half board" in t or "hb" in t:
+    if "half board" in t:
         return "Half Board"
-
-    if "bed & breakfast" in t or "breakfast" in t or "b&b" in t:
+    if "bed" in t:
         return "Bed & Breakfast"
-
-    if "apartment" in t or "kitchen" in t or "studio" in t:
+    if "apartment" in t or "kitchen" in t:
         return "Rental"
 
     return None
 
 
 # ─────────────────────────────
-# APIFY SCRAPER
+# APIFY
 # ─────────────────────────────
 
-def scrape(client, hotel, location, checkin, checkout, adults):
+def fetch(client, name, location, checkin, checkout, adults):
 
     run = client.actor("automation-lab/booking-scraper").call({
         "locationQuery": location,
@@ -59,25 +55,16 @@ def scrape(client, hotel, location, checkin, checkout, adults):
     dataset = client.dataset(getattr(run, "defaultDatasetId"))
     items = list(dataset.iterate_items())
 
-    results = []
+    out = []
 
     for i in items:
 
-        name = i.get("name", "")
+        rt = room_type((i.get("name","") + i.get("description","")))
 
-        desc = (
-            i.get("description")
-            or i.get("roomType")
-            or ""
-        )
+        if not rt:
+            continue
 
-        room_type = detect_room(desc + name)
-
-        if not room_type:
-            continue  # ❗ skip if no BB/HB/Rental
-
-        price = i.get("price") or i.get("totalPrice") or 0
-
+        price = i.get("price") or 0
         try:
             price = float(price)
         except:
@@ -86,93 +73,100 @@ def scrape(client, hotel, location, checkin, checkout, adults):
         if price <= 0:
             continue
 
-        results.append({
-            "hotel": hotel,
-            "room_type": room_type,
-            "adults": adults,
-            "price": price,
+        out.append({
+            "hotel": name,
+            "location": location,
+            "room_type": rt,
+            "price": price
         })
 
-    return results
+    return out
 
 
 # ─────────────────────────────
 # UI
 # ─────────────────────────────
 
-st.title("🏨 Hotel Pricing Engine")
+st.title("🏨 Self Hotel Competitor Tracker")
 
-df_hotels = load_hotels()
+df = load()
 
 checkin = st.date_input("Check-in", date.today() + timedelta(days=14))
 checkout = st.date_input("Check-out", checkin + timedelta(days=7))
 
-adults_list = st.multiselect(
-    "Guests",
-    [2, 3, 4, 5, 6],
-    default=[2, 3, 4]
-)
+adults = st.selectbox("Adults", [2,3,4,5,6], 0)
 
-hotel_filter = st.multiselect(
-    "Hotels",
-    df_hotels["hotel"].tolist() if "hotel" in df_hotels.columns else df_hotels.iloc[:, 0].tolist()
-)
+# ─────────────────────────────
+# SELF HOTEL SELECT
+# ─────────────────────────────
 
-if st.button("Fetch Prices"):
+self_hotels = df[df["type"] == "self"]["hotel"].unique().tolist()
 
-    client = ApifyClient(get_token())
+selected_self = st.selectbox("Select Self Hotel", self_hotels)
 
-    all_data = []
+if st.button("Fetch"):
 
-    for _, h in df_hotels.iterrows():
+    client = ApifyClient(token())
 
-        hotel_name = h.get("hotel") or h.iloc[0]
-        location = h.get("location") or "Slovenia"
+    # ─────────────────────────────
+    # GET SELECTED GROUP
+    # ─────────────────────────────
 
-        if hotel_filter and hotel_name not in hotel_filter:
-            continue
+    self_row = df[df["hotel"] == selected_self].iloc[0]
 
-        for adults in adults_list:
+    location = self_row["location"]
 
-            data = scrape(
-                client,
-                hotel_name,
-                location,
-                checkin.strftime("%Y-%m-%d"),
-                checkout.strftime("%Y-%m-%d"),
-                adults
-            )
+    # self + competitors in SAME location group
+    group = df[df["location"] == location]
 
-            for d in data:
-                all_data.append(d)
+    group = group[group["hotel"].notna()]
 
-    df = pd.DataFrame(all_data)
+    results = []
 
-    if df.empty:
-        st.warning("No data found")
+    # ─────────────────────────────
+    # FETCH ONLY GROUP
+    # ─────────────────────────────
+
+    for _, r in group.iterrows():
+
+        data = fetch(
+            client,
+            r["hotel"],
+            r["location"],
+            checkin.strftime("%Y-%m-%d"),
+            checkout.strftime("%Y-%m-%d"),
+            adults
+        )
+
+        results.extend(data)
+
+    df_out = pd.DataFrame(results)
+
+    if df_out.empty:
+        st.warning("No data")
         st.stop()
 
     # SORT HIGH → LOW
-    df = df.sort_values("price", ascending=False)
+    df_out = df_out.sort_values("price", ascending=False)
 
     # ─────────────────────────────
-    # OUTPUT (CLEAN PIVOT STYLE)
+    # OUTPUT
     # ─────────────────────────────
 
-    st.subheader("Results (High → Low)")
+    st.subheader(f"Comparison for {selected_self}")
 
-    for _, r in df.iterrows():
+    for _, r in df_out.iterrows():
 
         st.markdown(f"""
 ### {r['hotel']}
 
 🏷️ {r['room_type']}  
-👥 {r['adults']} persons  
+📍 {r['location']}  
 
 ## €{r['price']:,.0f}
 """)
 
         st.divider()
 
-    st.dataframe(df)
+    st.dataframe(df_out)
 
