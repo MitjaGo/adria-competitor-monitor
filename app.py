@@ -1,11 +1,7 @@
 import streamlit as st
-import requests
 import pandas as pd
 from datetime import date, timedelta
 import time
-import json
-import re
-from urllib.parse import urlencode
 import random
 
 # ── Page Config ───────────────────────────────────────────────────────────────
@@ -21,100 +17,53 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
 
-html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
-}
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 h1, h2, h3 { font-family: 'DM Serif Display', serif; }
-
 .main { background: #f0f4f8; }
 
 .hero-banner {
     background: linear-gradient(135deg, #0a4f6e 0%, #1a7a9e 50%, #0d8f8f 100%);
-    border-radius: 16px;
-    padding: 2rem 2.5rem;
-    color: white;
-    margin-bottom: 1.5rem;
-    box-shadow: 0 8px 32px rgba(10,79,110,0.25);
+    border-radius: 16px; padding: 2rem 2.5rem; color: white;
+    margin-bottom: 1.5rem; box-shadow: 0 8px 32px rgba(10,79,110,0.25);
 }
 .hero-banner h1 { color: white; margin: 0 0 0.3rem 0; font-size: 2rem; }
 .hero-banner p  { margin: 0; opacity: 0.85; font-size: 1rem; }
 
 .metric-card {
-    background: white;
-    border-radius: 12px;
-    padding: 1.2rem 1.5rem;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.07);
-    border-left: 4px solid #1a7a9e;
+    background: white; border-radius: 12px; padding: 1.2rem 1.5rem;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.07); border-left: 4px solid #1a7a9e;
 }
-
 .property-card {
-    background: white;
-    border-radius: 12px;
-    padding: 1.2rem 1.5rem;
-    margin-bottom: 0.8rem;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.07);
+    background: white; border-radius: 12px; padding: 1.2rem 1.5rem;
+    margin-bottom: 0.8rem; box-shadow: 0 2px 10px rgba(0,0,0,0.07);
     border-top: 3px solid transparent;
-    transition: box-shadow 0.2s;
 }
-.property-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.12); }
-.property-card.adria { border-top-color: #e8623a; }
+.property-card.adria   { border-top-color: #e8623a; }
 .property-card.cheaper { border-top-color: #2ecc71; }
 .property-card.pricier { border-top-color: #e74c3c; }
 
 .tag {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 20px;
-    font-size: 0.72rem;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    display: inline-block; padding: 2px 10px; border-radius: 20px;
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
 }
-.tag-adria    { background: #fde8e0; color: #c0392b; }
-.tag-cheaper  { background: #d5f5e3; color: #1a7a40; }
-.tag-pricier  { background: #fde8e0; color: #a93226; }
-.tag-similar  { background: #d6eaf8; color: #1a5276; }
+.tag-adria   { background: #fde8e0; color: #c0392b; }
+.tag-cheaper { background: #d5f5e3; color: #1a7a40; }
+.tag-pricier { background: #fde8e0; color: #a93226; }
+.tag-similar { background: #d6eaf8; color: #1a5276; }
 
 .stButton > button {
     background: linear-gradient(135deg, #0a4f6e, #1a7a9e);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    font-weight: 600;
-    padding: 0.6rem 2rem;
-    font-size: 1rem;
-    width: 100%;
+    color: white; border: none; border-radius: 8px;
+    font-weight: 600; padding: 0.6rem 2rem; font-size: 1rem; width: 100%;
 }
 .stButton > button:hover { opacity: 0.88; }
 
 .info-box {
-    background: #e8f4f8;
-    border: 1px solid #a8d5e8;
-    border-radius: 8px;
-    padding: 0.8rem 1.2rem;
-    font-size: 0.88rem;
-    color: #0a4f6e;
+    background: #e8f4f8; border: 1px solid #a8d5e8; border-radius: 8px;
+    padding: 0.8rem 1.2rem; font-size: 0.88rem; color: #0a4f6e;
 }
 </style>
 """, unsafe_allow_html=True)
-
-# ── Constants ─────────────────────────────────────────────────────────────────
-COMPETITORS = [
-    {"name": "Hotel Convent",           "booking_id": "1779957518168", "region": "Slovenia – Ankaran",  "is_self": True},
-    {"name": "Adria Mobilehome","booking_id": None,     "region": "Slovenia – Ankaran",  "is_self": True},
-    {"name": "Adria Apartments",           "booking_id": None,     "region": "Slovenia – Ankaran",  "is_self": True},
-    {"name": "Adria Villas",           "booking_id": None,     "region": "Slovenia – Ankaran",  "is_self": True},
-    {"name": "Adria Villas without balcony",           "booking_id": None,     "region": "Slovenia – Ankaran",  "is_self": True},
-    {"name": "Kempinski Palace Portorož","booking_id": None,    "region": "Slovenia – Portorož", "is_self": False},
-    {"name": "Hotel Riviera Portorož",  "booking_id": None,     "region": "Slovenia – Portorož", "is_self": False},
-    {"name": "Hotel Piran",             "booking_id": None,     "region": "Slovenia – Piran",    "is_self": False},
-    {"name": "Valamar Riviera",         "booking_id": None,     "region": "Croatia – Poreč",     "is_self": False},
-    {"name": "Sol Garden Istra",        "booking_id": None,     "region": "Croatia – Poreč",     "is_self": False},
-    {"name": "Maistra Resort Rovinj",   "booking_id": None,     "region": "Croatia – Rovinj",    "is_self": False},
-    {"name": "Hotel Lone Rovinj",       "booking_id": None,     "region": "Croatia – Rovinj",    "is_self": False},
-    {"name": "Hotel Monte Mulini",      "booking_id": None,     "region": "Croatia – Rovinj",    "is_self": False},
-    {"name": "Falkensteiner Punta Skala","booking_id": None,    "region": "Croatia – Zadar",     "is_self": False},
-]
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -129,92 +78,56 @@ def _get_apify_token():
 def _apify_scrape(checkin: date, checkout: date, adults: int,
                   location: str, token: str, max_items: int = 30) -> list[dict]:
     """
-    Call the Apify Booking.com scraper actor and return normalised results.
     Actor: automation-lab/booking-scraper
     Docs:  https://apify.com/automation-lab/booking-scraper
+    Uses official apify_client — no raw HTTP, no URL encoding bugs.
     """
-    ACTOR_ID = "automation-lab~booking-scraper"   # ✅ correct actor ID
-    BASE_URL = "https://api.apify.com/v2"
+    from apify_client import ApifyClient
+
+    client = ApifyClient(token)
+    nights = (checkout - checkin).days or 1
 
     run_input = {
-        "locationQuery": location,                 # ✅ correct field name
+        "locationQuery": location,
         "checkin":       checkin.strftime("%Y-%m-%d"),
         "checkout":      checkout.strftime("%Y-%m-%d"),
         "adults":        adults,
         "rooms":         1,
         "currency":      "EUR",
-        "language":      "en-gb",
+        "language":      "en-us",
         "maxResults":    max_items,
+        "sortBy":        "popularity",
     }
 
-    headers = {
-        "Content-Type":  "application/json",
-        "Authorization": f"Bearer {token}",
-    }
-
-    run_resp = requests.post(
-        f"{BASE_URL}/acts/{ACTOR_ID}/runs",
-        json=run_input,
-        headers=headers,
-        params={"waitForFinish": 120},
-        timeout=130,
+    run = client.actor("automation-lab/booking-scraper").call(
+        run_input=run_input,
+        timeout_secs=180,
     )
-    run_resp.raise_for_status()
-    run_data   = run_resp.json()
-    run_id     = run_data["data"]["id"]
-    dataset_id = run_data["data"]["defaultDatasetId"]
 
-    # Poll until done
-    for _ in range(30):
-        status_resp = requests.get(
-            f"{BASE_URL}/actor-runs/{run_id}",
-            headers=headers, timeout=15,
-        )
-        status = status_resp.json()["data"]["status"]
-        if status in ("SUCCEEDED", "FAILED", "ABORTED", "TIMED-OUT"):
-            break
-        time.sleep(5)
+    raw = list(client.dataset(run["defaultDatasetId"]).iterate_items())
 
-    if status != "SUCCEEDED":
-        return []
-
-    items_resp = requests.get(
-        f"{BASE_URL}/datasets/{dataset_id}/items",
-        headers=headers,
-        params={"format": "json", "clean": True, "limit": max_items},
-        timeout=20,
-    )
-    items_resp.raise_for_status()
-    raw = items_resp.json()
-
-    nights = (checkout - checkin).days or 1
     results = []
     for h in raw:
-        price_raw = h.get("price") or h.get("priceForDisplay") or 0
-        try:
-            price_eur = float(str(price_raw).replace(",", "").replace("€", "").strip())
-        except ValueError:
-            price_eur = 0.0
-
-        name   = h.get("name") or h.get("hotel_name") or "Unknown"
-        stars  = int(h.get("stars") or h.get("starRating") or 0)
-        rating = float(h.get("rating") or h.get("reviewScore") or 0)
-        region = h.get("address", {}).get("country", "") if isinstance(h.get("address"), dict) \
-                 else h.get("city", location)
-        is_self = "adria ankaran" in name.lower()
+        price_eur = float(h.get("price") or 0)
+        per_night = float(h.get("pricePerNight") or (price_eur / nights if nights else 0))
+        name      = h.get("name") or "Unknown"
+        stars     = int(h.get("starRating") or 0)
+        rating    = float(h.get("reviewScore") or 0)
+        region    = h.get("location") or location
+        is_self   = "adria ankaran" in name.lower()
 
         results.append({
             "name":        name,
-            "region":      region or location,
+            "region":      region,
             "stars":       stars,
             "rating":      rating,
             "adults":      adults,
             "nights":      nights,
             "price_eur":   price_eur,
-            "per_night":   round(price_eur / nights, 2) if nights else price_eur,
+            "per_night":   round(per_night, 2),
             "is_self":     is_self,
             "source":      "apify_live",
-            "booking_url": h.get("url") or h.get("bookingUrl") or "",
+            "booking_url": h.get("url") or "",
         })
 
     return results
@@ -344,7 +257,7 @@ with st.sidebar:
     st.markdown("""
 <div class="info-box">
 <b>ℹ️ Live data:</b> Add your free <a href="https://apify.com" target="_blank">Apify</a> token above.<br>
-<b>Demo mode:</b> Realistic simulated pricing used when no token provided.
+<b>Demo mode:</b> Realistic simulated pricing when no token provided.
 </div>
 """, unsafe_allow_html=True)
 
@@ -356,7 +269,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Welcome screen ────────────────────────────────────────────────────────────
 if not search_btn:
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -377,7 +290,7 @@ if not search_btn:
     st.info("👈 Select dates and guests, then click **Fetch Prices** in the sidebar.")
     st.stop()
 
-# ── Fetch data ────────────────────────────────────────────────────────────────
+# ── Fetch ─────────────────────────────────────────────────────────────────────
 adult_counts = [a for a, show in [(2, show_2), (3, show_3), (4, show_4)] if show]
 
 if not adult_counts:
@@ -408,7 +321,7 @@ if df.empty:
     st.warning("No results match your filters.")
     st.stop()
 
-# ── KPI row ───────────────────────────────────────────────────────────────────
+# ── KPIs ──────────────────────────────────────────────────────────────────────
 adria_rows = df[df["is_self"]]
 comp_rows  = df[~df["is_self"]]
 
@@ -537,7 +450,7 @@ with tab3:
     )
     st.altair_chart(bar, use_container_width=False)
 
-    st.markdown("#### Per-night price distribution (box plot)")
+    st.markdown("#### Per-night price distribution")
     box = (
         alt.Chart(chart_df)
         .mark_boxplot(extent="min-max", size=30)
