@@ -100,32 +100,23 @@ h1, h2, h3 { font-family: 'DM Serif Display', serif; }
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 COMPETITORS = [
-    {"name": "Adria Ankaran",      "booking_id": "219994",  "region": "Slovenia – Ankaran",   "is_self": True},
-    {"name": "Camping Adria Mobilehome", "booking_id": None, "region": "Slovenia – Ankaran",  "is_self": False},
-    {"name": "Bernot Hostel",      "booking_id": None,      "region": "Slovenia – Ankaran",   "is_self": False},
-    {"name": "Kempinski Palace Portorož","booking_id": None,"region": "Slovenia – Portorož",  "is_self": False},
-    {"name": "Hotel Riviera Portorož",  "booking_id": None, "region": "Slovenia – Portorož",  "is_self": False},
-    {"name": "Hotel Piran",        "booking_id": None,      "region": "Slovenia – Piran",      "is_self": False},
-    {"name": "Valamar Riviera",    "booking_id": None,      "region": "Croatia – Poreč",       "is_self": False},
-    {"name": "Sol Garden Istra",   "booking_id": None,      "region": "Croatia – Poreč",       "is_self": False},
-    {"name": "Maistra Resort Rovinj","booking_id": None,    "region": "Croatia – Rovinj",      "is_self": False},
-    {"name": "Hotel Lone Rovinj",  "booking_id": None,      "region": "Croatia – Rovinj",      "is_self": False},
-    {"name": "Hotel Monte Mulini", "booking_id": None,      "region": "Croatia – Rovinj",      "is_self": False},
-    {"name": "Falkensteiner Punta Skala","booking_id": None,"region": "Croatia – Zadar",      "is_self": False},
+    {"name": "Adria Ankaran",           "booking_id": "219994", "region": "Slovenia – Ankaran",  "is_self": True},
+    {"name": "Camping Adria Mobilehome","booking_id": None,     "region": "Slovenia – Ankaran",  "is_self": False},
+    {"name": "Bernot Hostel",           "booking_id": None,     "region": "Slovenia – Ankaran",  "is_self": False},
+    {"name": "Kempinski Palace Portorož","booking_id": None,    "region": "Slovenia – Portorož", "is_self": False},
+    {"name": "Hotel Riviera Portorož",  "booking_id": None,     "region": "Slovenia – Portorož", "is_self": False},
+    {"name": "Hotel Piran",             "booking_id": None,     "region": "Slovenia – Piran",    "is_self": False},
+    {"name": "Valamar Riviera",         "booking_id": None,     "region": "Croatia – Poreč",     "is_self": False},
+    {"name": "Sol Garden Istra",        "booking_id": None,     "region": "Croatia – Poreč",     "is_self": False},
+    {"name": "Maistra Resort Rovinj",   "booking_id": None,     "region": "Croatia – Rovinj",    "is_self": False},
+    {"name": "Hotel Lone Rovinj",       "booking_id": None,     "region": "Croatia – Rovinj",    "is_self": False},
+    {"name": "Hotel Monte Mulini",      "booking_id": None,     "region": "Croatia – Rovinj",    "is_self": False},
+    {"name": "Falkensteiner Punta Skala","booking_id": None,    "region": "Croatia – Zadar",     "is_self": False},
 ]
-
-SEARCH_REGIONS = {
-    "Slovenia – Ankaran / Koper": {"latitude": 45.5780, "longitude": 13.7373, "dest_id": "-88560",   "dest_type": "region"},
-    "Slovenia – Portorož":        {"latitude": 45.5146, "longitude": 13.5924, "dest_id": "-88560",   "dest_type": "region"},
-    "Croatia – Poreč / Pula":     {"latitude": 45.2277, "longitude": 13.5934, "dest_id": "-88316",   "dest_type": "region"},
-    "Croatia – Rovinj":           {"latitude": 45.0812, "longitude": 13.6399, "dest_id": "-88316",   "dest_type": "region"},
-    "All (Coastal Slovenia + Istria)": {"dest_id": "all", "dest_type": "region"},
-}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _get_apify_token() -> str | None:
-    """Read Apify token from Streamlit secrets or env var."""
+def _get_apify_token():
     import os
     try:
         return st.secrets.get("APIFY_TOKEN") or os.getenv("APIFY_TOKEN")
@@ -137,23 +128,21 @@ def _apify_scrape(checkin: date, checkout: date, adults: int,
                   location: str, token: str, max_items: int = 30) -> list[dict]:
     """
     Call the Apify Booking.com scraper actor and return normalised results.
-    Actor: apify/booking-scraper  (free tier: ~$5/month credit, ~3000 hotels)
-    Docs:  https://apify.com/apify/booking-scraper
+    Actor: automation-lab/booking-scraper
+    Docs:  https://apify.com/automation-lab/booking-scraper
     """
-    ACTOR_ID = "apify~booking-scraper"
+    ACTOR_ID = "automation-lab~booking-scraper"   # ✅ correct actor ID
     BASE_URL = "https://api.apify.com/v2"
 
     run_input = {
-        "search":        location,
-        "checkIn":       checkin.strftime("%Y-%m-%d"),
-        "checkOut":      checkout.strftime("%Y-%m-%d"),
+        "locationQuery": location,                 # ✅ correct field name
+        "checkin":       checkin.strftime("%Y-%m-%d"),
+        "checkout":      checkout.strftime("%Y-%m-%d"),
         "adults":        adults,
         "rooms":         1,
         "currency":      "EUR",
         "language":      "en-gb",
-        "maxItems":      max_items,
-        "propertyType":  "",
-        "minScore":      "0",
+        "maxResults":    max_items,
     }
 
     headers = {
@@ -173,6 +162,7 @@ def _apify_scrape(checkin: date, checkout: date, adults: int,
     run_id     = run_data["data"]["id"]
     dataset_id = run_data["data"]["defaultDatasetId"]
 
+    # Poll until done
     for _ in range(30):
         status_resp = requests.get(
             f"{BASE_URL}/actor-runs/{run_id}",
@@ -209,7 +199,6 @@ def _apify_scrape(checkin: date, checkout: date, adults: int,
         rating = float(h.get("rating") or h.get("reviewScore") or 0)
         region = h.get("address", {}).get("country", "") if isinstance(h.get("address"), dict) \
                  else h.get("city", location)
-
         is_self = "adria ankaran" in name.lower()
 
         results.append({
@@ -231,11 +220,6 @@ def _apify_scrape(checkin: date, checkout: date, adults: int,
 
 def scrape_booking_prices(checkin: date, checkout: date, adults: int,
                           dest: str, progress_bar=None) -> list[dict]:
-    """
-    Main fetch function.
-    1. Try Apify (real live data) if APIFY_TOKEN is set.
-    2. Fall back to realistic demo data.
-    """
     token = _get_apify_token()
     if token:
         try:
@@ -244,49 +228,37 @@ def scrape_booking_prices(checkin: date, checkout: date, adults: int,
                 return results
         except Exception as e:
             st.warning(f"Apify error: {e} — falling back to demo data.")
-
     return _demo_data(checkin, checkout, adults)
 
 
 def _demo_data(checkin: date, checkout: date, adults: int) -> list[dict]:
-    """
-    Realistic demo/seed data based on typical pricing in the region.
-    Used when live scraping is blocked.
-    """
     nights = (checkout - checkin).days or 1
-    base = {2: 1.0, 3: 1.35, 4: 1.65}.get(adults, 1.0)
-
-    month = checkin.month
-    if month in (7, 8):
-        season = 1.5
-    elif month in (6, 9):
-        season = 1.2
-    else:
-        season = 0.75
+    base   = {2: 1.0, 3: 1.35, 4: 1.65}.get(adults, 1.0)
+    month  = checkin.month
+    season = 1.5 if month in (7, 8) else 1.2 if month in (6, 9) else 0.75
 
     def price(base_night, spread=0.15):
-        raw = base_night * adults * base * season * nights
+        raw   = base_night * adults * base * season * nights
         noise = random.uniform(1 - spread, 1 + spread)
         return round(raw * noise, 0)
 
-    seed = (checkin.toordinal() + adults) % 100
-    random.seed(seed)
+    random.seed((checkin.toordinal() + adults) % 100)
 
     properties = [
-        {"name": "Adria Ankaran Resort & Spa",   "region": "SI – Ankaran",  "stars": 4, "base_night": 65,  "is_self": True,  "rating": 8.1},
-        {"name": "Kempinski Palace Portorož",    "region": "SI – Portorož", "stars": 5, "base_night": 165, "is_self": False, "rating": 9.0},
-        {"name": "Hotel Riviera Portorož",       "region": "SI – Portorož", "stars": 4, "base_night": 90,  "is_self": False, "rating": 8.3},
-        {"name": "Hotel Piran",                  "region": "SI – Piran",    "stars": 4, "base_night": 75,  "is_self": False, "rating": 8.6},
-        {"name": "Hotel Tartini Piran",          "region": "SI – Piran",    "stars": 3, "base_night": 55,  "is_self": False, "rating": 8.0},
-        {"name": "Hostel Bernot",                "region": "SI – Ankaran",  "stars": 2, "base_night": 28,  "is_self": False, "rating": 7.4},
-        {"name": "Hotel Lone Rovinj",            "region": "HR – Rovinj",   "stars": 5, "base_night": 145, "is_self": False, "rating": 8.9},
-        {"name": "Hotel Monte Mulini Rovinj",    "region": "HR – Rovinj",   "stars": 5, "base_night": 155, "is_self": False, "rating": 9.1},
-        {"name": "Maistra Resort Rovinj",        "region": "HR – Rovinj",   "stars": 4, "base_night": 95,  "is_self": False, "rating": 8.5},
-        {"name": "Valamar Riviera Poreč",        "region": "HR – Poreč",    "stars": 4, "base_night": 85,  "is_self": False, "rating": 8.2},
-        {"name": "Sol Garden Istra Poreč",       "region": "HR – Poreč",    "stars": 4, "base_night": 80,  "is_self": False, "rating": 8.0},
-        {"name": "Hotel Parentino Poreč",        "region": "HR – Poreč",    "stars": 3, "base_night": 58,  "is_self": False, "rating": 7.8},
-        {"name": "Falkensteiner Punta Skala",    "region": "HR – Zadar",    "stars": 5, "base_night": 130, "is_self": False, "rating": 9.0},
-        {"name": "Boutique Hotel Orsula Split",  "region": "HR – Split",    "stars": 4, "base_night": 105, "is_self": False, "rating": 8.7},
+        {"name": "Adria Ankaran Resort & Spa",  "region": "SI – Ankaran",  "stars": 4, "base_night": 65,  "is_self": True,  "rating": 8.1},
+        {"name": "Kempinski Palace Portorož",   "region": "SI – Portorož", "stars": 5, "base_night": 165, "is_self": False, "rating": 9.0},
+        {"name": "Hotel Riviera Portorož",      "region": "SI – Portorož", "stars": 4, "base_night": 90,  "is_self": False, "rating": 8.3},
+        {"name": "Hotel Piran",                 "region": "SI – Piran",    "stars": 4, "base_night": 75,  "is_self": False, "rating": 8.6},
+        {"name": "Hotel Tartini Piran",         "region": "SI – Piran",    "stars": 3, "base_night": 55,  "is_self": False, "rating": 8.0},
+        {"name": "Hostel Bernot",               "region": "SI – Ankaran",  "stars": 2, "base_night": 28,  "is_self": False, "rating": 7.4},
+        {"name": "Hotel Lone Rovinj",           "region": "HR – Rovinj",   "stars": 5, "base_night": 145, "is_self": False, "rating": 8.9},
+        {"name": "Hotel Monte Mulini Rovinj",   "region": "HR – Rovinj",   "stars": 5, "base_night": 155, "is_self": False, "rating": 9.1},
+        {"name": "Maistra Resort Rovinj",       "region": "HR – Rovinj",   "stars": 4, "base_night": 95,  "is_self": False, "rating": 8.5},
+        {"name": "Valamar Riviera Poreč",       "region": "HR – Poreč",    "stars": 4, "base_night": 85,  "is_self": False, "rating": 8.2},
+        {"name": "Sol Garden Istra Poreč",      "region": "HR – Poreč",    "stars": 4, "base_night": 80,  "is_self": False, "rating": 8.0},
+        {"name": "Hotel Parentino Poreč",       "region": "HR – Poreč",    "stars": 3, "base_night": 58,  "is_self": False, "rating": 7.8},
+        {"name": "Falkensteiner Punta Skala",   "region": "HR – Zadar",    "stars": 5, "base_night": 130, "is_self": False, "rating": 9.0},
+        {"name": "Boutique Hotel Orsula Split", "region": "HR – Split",    "stars": 4, "base_night": 105, "is_self": False, "rating": 8.7},
     ]
 
     out = []
@@ -319,7 +291,7 @@ with st.sidebar:
     st.markdown("## 🌊 Search Settings")
     st.divider()
 
-    today = date.today()
+    today       = date.today()
     default_in  = today + timedelta(days=14)
     default_out = default_in + timedelta(days=7)
 
@@ -352,7 +324,7 @@ with st.sidebar:
         "Paste your token for live data",
         type="password",
         placeholder="apify_api_xxxx…",
-        help="Free at apify.com — $5/month credit (~3000 hotels). Leave blank for demo data.",
+        help="Free at apify.com — $5/month credit. Leave blank for demo data.",
     )
     if apify_token_input:
         import os; os.environ["APIFY_TOKEN"] = apify_token_input
@@ -369,7 +341,7 @@ with st.sidebar:
 
     st.markdown("""
 <div class="info-box">
-<b>ℹ️ Live data:</b> Add your free <a href="https://apify.com" target="_blank">Apify</a> token above.
+<b>ℹ️ Live data:</b> Add your free <a href="https://apify.com" target="_blank">Apify</a> token above.<br>
 <b>Demo mode:</b> Realistic simulated pricing used when no token provided.
 </div>
 """, unsafe_allow_html=True)
@@ -386,24 +358,20 @@ st.markdown("""
 if not search_btn:
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown("""
-        <div class="metric-card">
+        st.markdown("""<div class="metric-card">
             <h4>📍 Coverage</h4>
             <p>14 properties across Ankaran, Portorož, Piran, Rovinj, Poreč, Zadar</p>
         </div>""", unsafe_allow_html=True)
     with col2:
-        st.markdown("""
-        <div class="metric-card">
+        st.markdown("""<div class="metric-card">
             <h4>👥 Guest Configs</h4>
             <p>Compare prices for 2, 3 and 4 adults per room simultaneously</p>
         </div>""", unsafe_allow_html=True)
     with col3:
-        st.markdown("""
-        <div class="metric-card">
+        st.markdown("""<div class="metric-card">
             <h4>🔄 Data Source</h4>
-            <p>Live Booking.com scrape with realistic fallback if blocked</p>
+            <p>Live Booking.com data via Apify, with realistic fallback if needed</p>
         </div>""", unsafe_allow_html=True)
-
     st.info("👈 Select dates and guests, then click **Fetch Prices** in the sidebar.")
     st.stop()
 
@@ -414,11 +382,11 @@ if not adult_counts:
     st.warning("Select at least one guest configuration.")
     st.stop()
 
-all_data: list[dict] = []
+all_data = []
 progress = st.progress(0, text="Fetching prices…")
 
 for i, adults in enumerate(adult_counts):
-    progress.progress((i) / len(adult_counts), text=f"Fetching prices for {adults} adults…")
+    progress.progress(i / len(adult_counts), text=f"Fetching prices for {adults} adults…")
     rows = scrape_booking_prices(checkin, checkout, adults, "Ankaran, Slovenia")
     all_data.extend(rows)
     time.sleep(0.3)
@@ -432,7 +400,6 @@ df = pd.DataFrame(all_data)
 # ── Filter ────────────────────────────────────────────────────────────────────
 if region_filter:
     df = df[df["region"].isin(region_filter) | df["is_self"]]
-
 df = df[df["stars"] >= stars_filter]
 
 if df.empty:
@@ -486,12 +453,10 @@ with tab1:
                 tag_html   = '<span class="tag tag-adria">OUR PROPERTY</span>'
             elif adria_ref and price < adria_ref * 0.95:
                 card_class = "cheaper"
-                diff       = adria_ref - price
-                tag_html   = f'<span class="tag tag-cheaper">€{diff:.0f} cheaper</span>'
+                tag_html   = f'<span class="tag tag-cheaper">€{adria_ref - price:.0f} cheaper</span>'
             elif adria_ref and price > adria_ref * 1.05:
                 card_class = "pricier"
-                diff       = price - adria_ref
-                tag_html   = f'<span class="tag tag-pricier">€{diff:.0f} pricier</span>'
+                tag_html   = f'<span class="tag tag-pricier">€{price - adria_ref:.0f} pricier</span>'
             else:
                 card_class = ""
                 tag_html   = '<span class="tag tag-similar">similar</span>'
@@ -503,16 +468,14 @@ with tab1:
 <div class="property-card {card_class}">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;">
     <div>
-      <b style="font-size:1.05rem;">{row['name']}</b>
-      {tag_html}
-      <br>
+      <b style="font-size:1.05rem;">{row['name']}</b> {tag_html}<br>
       <span style="color:#666;font-size:0.85rem;">
         {stars_display(row['stars'])} &nbsp;·&nbsp; ⭐ {row['rating']} &nbsp;·&nbsp; {row['region']}
       </span>
     </div>
     <div style="text-align:right;">
-      <span style="font-size:1.5rem;font-weight:700;color:#0a4f6e;">€{price:,.0f}</span>
-      <br><span style="color:#888;font-size:0.8rem;">€{row['per_night']:,.0f}/night</span>
+      <span style="font-size:1.5rem;font-weight:700;color:#0a4f6e;">€{price:,.0f}</span><br>
+      <span style="color:#888;font-size:0.8rem;">€{row['per_night']:,.0f}/night</span>
     </div>
   </div>
   <div style="margin-top:0.6rem;background:#eee;border-radius:4px;height:6px;">
@@ -529,7 +492,7 @@ with tab2:
     display_df.columns = ["Property", "Region", "Stars", "Rating",
                           "Adults", "Nights", "Total €", "Per Night €", "Our Property"]
     display_df = display_df.sort_values(["Adults", "Total €"])
-    display_df["Stars"] = display_df["Stars"].apply(stars_display)
+    display_df["Stars"]        = display_df["Stars"].apply(stars_display)
     display_df["Our Property"] = display_df["Our Property"].apply(lambda x: "✅" if x else "")
 
     st.dataframe(
@@ -542,7 +505,6 @@ with tab2:
             "Rating":      st.column_config.NumberColumn(format="%.1f"),
         },
     )
-
     csv = display_df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download CSV", csv, "competitor_prices.csv", "text/csv")
 
@@ -555,7 +517,6 @@ with tab3:
     chart_df["color"] = chart_df["is_self"].apply(lambda x: "Adria Ankaran" if x else "Competitor")
 
     st.markdown("#### Total stay price by property and guest count")
-
     bar = (
         alt.Chart(chart_df)
         .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
