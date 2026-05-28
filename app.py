@@ -100,9 +100,11 @@ h1, h2, h3 { font-family: 'DM Serif Display', serif; }
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 COMPETITORS = [
-    {"name": "Adria Ankaran",           "booking_id": "219994", "region": "Slovenia – Ankaran",  "is_self": True},
-    {"name": "Camping Adria Mobilehome","booking_id": None,     "region": "Slovenia – Ankaran",  "is_self": False},
-    {"name": "Bernot Hostel",           "booking_id": None,     "region": "Slovenia – Ankaran",  "is_self": False},
+    {"name": "Hotel Convent",           "booking_id": "1779957518168", "region": "Slovenia – Ankaran",  "is_self": True},
+    {"name": "Adria Mobilehome","booking_id": None,     "region": "Slovenia – Ankaran",  "is_self": True},
+    {"name": "Adria Apartments",           "booking_id": None,     "region": "Slovenia – Ankaran",  "is_self": True},
+    {"name": "Adria Villas",           "booking_id": None,     "region": "Slovenia – Ankaran",  "is_self": True},
+    {"name": "Adria Villas without balcony",           "booking_id": None,     "region": "Slovenia – Ankaran",  "is_self": True},
     {"name": "Kempinski Palace Portorož","booking_id": None,    "region": "Slovenia – Portorož", "is_self": False},
     {"name": "Hotel Riviera Portorož",  "booking_id": None,     "region": "Slovenia – Portorož", "is_self": False},
     {"name": "Hotel Piran",             "booking_id": None,     "region": "Slovenia – Piran",    "is_self": False},
