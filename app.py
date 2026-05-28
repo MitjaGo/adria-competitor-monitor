@@ -96,8 +96,12 @@ def scrape_booking_prices(checkin: date, checkout: date, adults: int, dest: str)
                 "maxResults": 30,
                 "sortBy": "popularity",
             }
-            # CHANGED: 'timeout_secs=180' changed to 'timeout=180' to match Apify SDK requirements
-            run = client.actor("automation-lab/booking-scraper").call(run_input=run_input, timeout=180)
+            
+            # FIXED: timeout parameter takes a timedelta instance to prevent internal comparison crashes
+            run = client.actor("automation-lab/booking-scraper").call(
+                run_input=run_input, 
+                timeout=timedelta(seconds=180)
+            )
             raw = list(client.dataset(run["defaultDatasetId"]).iterate_items())
 
             results = []
@@ -197,7 +201,7 @@ with st.sidebar:
 
     st.divider()
     
-    # Notice banner indicating validation of loaded runtime secrets
+    # Check secrets engine status
     token_loaded = _get_apify_token()
     if token_loaded:
         st.success("✅ Secure Token loaded from secrets")
