@@ -101,7 +101,6 @@ def _apify_scrape(checkin: date, checkout: date, adults: int,
 
     run = client.actor("automation-lab/booking-scraper").call(
         run_input=run_input,
-        timeout_secs=180,
     )
 
     raw = list(client.dataset(run["defaultDatasetId"]).iterate_items())
