@@ -175,7 +175,7 @@ def _apify_fetch_url(booking_url: str, checkin: date, checkout: date,
     }
 
     run   = client.actor("automation-lab/booking-scraper").call(
-        run_input=run_input, timeout_secs=180)
+        run_input=run_input, wait_secs=180)
     items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
 
     results = []
