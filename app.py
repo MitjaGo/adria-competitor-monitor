@@ -1,9 +1,10 @@
-import os
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
 import time
 import random
+import requests
+import io
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -13,12 +14,48 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Google Sheet CSV URLs ─────────────────────────────────────────────────────
+SHEET_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRbx6EnzVBv0ZlRvF6_GuO2ZlCUkrwFp9iR_GmViy5r41hzsexrBW84MdvXI-0DtNul4fEUaLGjx27C/pub"
+
+SHEETS = {
+    "🏰 Hotel Convent": {
+        "csv_url":    f"{SHEET_BASE}?gid=0&single=true&output=csv",
+        "color":      "#8e44ad",
+        "description": "Historic convent hotel · Ankaran",
+    },
+    "🏡 Vile brez balkona": {
+        "csv_url":    f"{SHEET_BASE}?gid=1313360174&single=true&output=csv",
+        "color":      "#27ae60",
+        "description": "Villas without balcony · Ankaran",
+    },
+}
+
+# Hardcoded fallback data (from your sheet, used if Google Sheets is unreachable)
+FALLBACK_DATA = {
+    "🏰 Hotel Convent": [
+        {"hotel": "Hotel Convent",   "type": "self",       "location": "Ankaran",  "url": "https://www.booking.com/hotel/si/convent.sl.html"},
+        {"hotel": "Hotel Riviera",   "type": "competitor", "location": "Portorož", "url": "https://www.booking.com/hotel/si/lifeclass-resort-portoroz-sr.sl.html"},
+        {"hotel": "Hotel Histrion",  "type": "competitor", "location": "Portorož", "url": "https://www.booking.com/hotel/si/histrion.sl.html"},
+        {"hotel": "Hotel Haliaetum", "type": "competitor", "location": "Izola",    "url": "https://www.booking.com/hotel/si/haliaetum.sl.html"},
+        {"hotel": "Hotel Marko",     "type": "competitor", "location": "Portorož", "url": "https://www.booking.com/hotel/si/marko.sl.html"},
+        {"hotel": "Hotel Lucija",    "type": "competitor", "location": "Portorož", "url": "https://www.booking.com/hotel/si/lucija.sl.html"},
+    ],
+    "🏡 Vile brez balkona": [
+        {"hotel": "Vile brez Balkona",         "type": "self",       "location": "Ankaran", "url": "https://www.booking.com/hotel/si/depandansa-bor.sl.html"},
+        {"hotel": "Hotel Vile Park",           "type": "competitor", "location": "Portorož","url": "https://www.booking.com/hotel/si/vile-park.sl.html"},
+        {"hotel": "Depandanse San Simon",      "type": "competitor", "location": "Izola",   "url": "https://www.booking.com/hotel/si/san-simon-resort-depandances.sl.html"},
+        {"hotel": "Vile Krka Talasso Strunjan","type": "competitor", "location": "Strunjan","url": "https://www.booking.com/hotel/si/vile-talaso-strunjan.sl.html"},
+        {"hotel": "Hotel Barbara Fiesa",       "type": "competitor", "location": "Fiesa",   "url": "https://www.booking.com/hotel/si/barbara-fiesa.sl"},
+        {"hotel": "Bio Hotel Koper",           "type": "competitor", "location": "Koper",   "url": "https://www.booking.com/hotel/si/bio.sl.html"},
+    ],
+}
+
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap');
-
-html, body, [class*="st-"] { font-family: 'DM Sans', sans-serif; }
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap');
+html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+h1, h2, h3 { font-family: 'DM Serif Display', serif; }
 .main { background: #f0f4f8; }
 
 .hero-banner {
@@ -26,7 +63,7 @@ html, body, [class*="st-"] { font-family: 'DM Sans', sans-serif; }
     border-radius: 16px; padding: 2rem 2.5rem; color: white;
     margin-bottom: 1.5rem; box-shadow: 0 8px 32px rgba(10,79,110,0.25);
 }
-.hero-banner h1 { margin: 0 0 0.3rem 0; font-size: 2rem; color: white; font-weight: 600; }
+.hero-banner h1 { color: white; margin: 0 0 0.3rem 0; font-size: 2rem; }
 .hero-banner p  { margin: 0; opacity: 0.85; font-size: 1rem; }
 
 .metric-card {
@@ -36,21 +73,32 @@ html, body, [class*="st-"] { font-family: 'DM Sans', sans-serif; }
 .property-card {
     background: white; border-radius: 12px; padding: 1.2rem 1.5rem;
     margin-bottom: 0.8rem; box-shadow: 0 2px 10px rgba(0,0,0,0.07);
-    border-top: 3px solid #ccc;
+    border-top: 3px solid transparent;
 }
-.property-card.adria   { border-top-color: #e8623a; }
-.property-card.cheaper { border-top-color: #2ecc71; }
-.property-card.pricier { border-top-color: #e74c3c; }
+.property-card.self_prop { border-top-color: #e8623a; }
+.property-card.cheaper   { border-top-color: #2ecc71; }
+.property-card.pricier   { border-top-color: #e74c3c; }
 
 .tag {
     display: inline-block; padding: 2px 10px; border-radius: 20px;
     font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
 }
-.tag-adria   { background: #fde8e0; color: #c0392b; }
+.tag-self    { background: #fde8e0; color: #c0392b; }
 .tag-cheaper { background: #d5f5e3; color: #1a7a40; }
 .tag-pricier { background: #fde8e0; color: #a93226; }
 .tag-similar { background: #d6eaf8; color: #1a5276; }
 
+.segment-header {
+    background: white; border-radius: 10px; padding: 0.8rem 1.2rem;
+    margin-bottom: 1rem; border-left: 5px solid #1a7a9e;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.stButton > button {
+    background: linear-gradient(135deg, #0a4f6e, #1a7a9e);
+    color: white; border: none; border-radius: 8px;
+    font-weight: 600; padding: 0.6rem 2rem; font-size: 1rem; width: 100%;
+}
+.stButton > button:hover { opacity: 0.88; }
 .info-box {
     background: #e8f4f8; border: 1px solid #a8d5e8; border-radius: 8px;
     padding: 0.8rem 1.2rem; font-size: 0.88rem; color: #0a4f6e;
@@ -58,367 +106,406 @@ html, body, [class*="st-"] { font-family: 'DM Sans', sans-serif; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Helpers & State Initializer ───────────────────────────────────────────────
-if "df_data" not in st.session_state:
-    st.session_state.df_data = None
-if "search_clicked" not in st.session_state:
-    st.session_state.search_clicked = False
-
-def _get_apify_token():
+# ── Load sheet data ───────────────────────────────────────────────────────────
+@st.cache_data(ttl=300)
+def load_sheet(seg_key: str) -> pd.DataFrame:
+    """Load competitor list from Google Sheet CSV. Falls back to hardcoded data."""
     try:
-        if "APIFY_TOKEN" in st.secrets:
-            return st.secrets["APIFY_TOKEN"]
+        url = SHEETS[seg_key]["csv_url"]
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        df = pd.read_csv(io.StringIO(resp.text))
+        df.columns = [c.strip().lower() for c in df.columns]
+        return df
+    except Exception:
+        return pd.DataFrame(FALLBACK_DATA[seg_key])
+
+# ── Apify helpers ─────────────────────────────────────────────────────────────
+def _get_apify_token():
+    import os
+    try:
+        return st.secrets.get("APIFY_TOKEN") or os.getenv("APIFY_TOKEN")
+    except Exception:
+        return os.getenv("APIFY_TOKEN")
+
+
+def _apify_fetch_url(booking_url: str, checkin: date, checkout: date,
+                     adults: int, token: str) -> dict | None:
+    """
+    Fetch price for a single Booking.com property URL via Apify.
+    Returns dict with price info or None on failure.
+    """
+    from apify_client import ApifyClient
+    client = ApifyClient(token)
+    nights = (checkout - checkin).days or 1
+
+    run_input = {
+        "startUrls": [{"url": booking_url}],
+        "checkin":   checkin.strftime("%Y-%m-%d"),
+        "checkout":  checkout.strftime("%Y-%m-%d"),
+        "adults":    adults,
+        "rooms":     1,
+        "currency":  "EUR",
+        "language":  "en-us",
+        "maxResults": 1,
+    }
+
+    try:
+        run = client.actor("automation-lab/booking-scraper").call(
+            run_input=run_input,
+            wait_secs=120,
+        )
+        items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+        if items:
+            h = items[0]
+            price_eur = float(h.get("price") or 0)
+            return {
+                "price_eur": price_eur,
+                "per_night": float(h.get("pricePerNight") or (price_eur / nights if nights else 0)),
+                "stars":     int(h.get("starRating") or 0),
+                "rating":    float(h.get("reviewScore") or 0),
+                "source":    "apify_live",
+            }
     except Exception:
         pass
-    return os.getenv("APIFY_TOKEN")
+    return None
 
-# FIXED: Added leading underscore to _progress_element to exclude it from hash calculations
-@st.cache_data(ttl=3600, show_spinner=False)
-def scrape_booking_prices(checkin: date, checkout: date, adults: int, dest: str, _progress_element=None) -> list[dict]:
-    token = _get_apify_token()
-    
-    if token:
-        try:
-            if _progress_element:
-                _progress_element.markdown(f"📡 **System Status:** Connecting to Apify API hub (Querying {adults} Adults dynamic tier)...")
-            
-            from apify_client import ApifyClient
-            client = ApifyClient(token)
-            nights = (checkout - checkin).days or 1
 
-            run_input = {
-                "locationQuery": dest,
-                "checkin": checkin.strftime("%Y-%m-%d"),
-                "checkout": checkout.strftime("%Y-%m-%d"),
-                "adults": adults,
-                "rooms": 1,
-                "currency": "EUR",
-                "language": "en-us",
-                "maxResults": 30,
-                "sortBy": "popularity",
-            }
-            
-            if _progress_element:
-                _progress_element.markdown(f"🤖 **System Status:** Launching `automation-lab/booking-scraper` payload container for {adults} adults...")
-                
-            run = client.actor("automation-lab/booking-scraper").call(
-                run_input=run_input, 
-                wait=timedelta(seconds=180)
-            )
-            
-            if _progress_element:
-                _progress_element.markdown(f"📥 **System Status:** Extracting data table dictionary from Apify Dataset key `{run['defaultDatasetId'][:8]}...`")
-                
-            raw = list(client.dataset(run["defaultDatasetId"]).iterate_items())
-
-            if not raw:
-                if _progress_element:
-                    _progress_element.markdown("⚠️ **System Status:** Apify worker returned 0 targets due to access filtering. Activating simulation layer...")
-                return _demo_data(checkin, checkout, adults)
-
-            if _progress_element:
-                _progress_element.markdown(f"⚙️ **System Status:** Normalizing pricing arrays and identifying internal property variables...")
-
-            results = []
-            for h in raw:
-                price_eur = float(h.get("price") or 0)
-                per_night = float(h.get("pricePerNight") or (price_eur / nights if nights else 0))
-                name = h.get("name") or "Unknown"
-                
-                results.append({
-                    "name": name,
-                    "region": h.get("location") or dest,
-                    "stars": int(h.get("starRating") or 0),
-                    "rating": float(h.get("reviewScore") or 0),
-                    "adults": adults,
-                    "nights": nights,
-                    "price_eur": price_eur,
-                    "per_night": round(per_night, 2),
-                    "is_self": "adria ankaran" in name.lower(),
-                    "source": "apify_live",
-                    "booking_url": h.get("url") or "",
-                })
-            if results: return results
-        except Exception as e:
-            st.sidebar.error(f"Apify Connection Refused: {str(e)}")
-            
-    if _progress_element:
-        _progress_element.markdown(f"⚠️ **System Status:** No API connectivity. Falling back to local algorithmic math engine for {adults} adults...")
-        time.sleep(0.8)
-        
-    return _demo_data(checkin, checkout, adults)
-
-def _demo_data(checkin: date, checkout: date, adults: int) -> list[dict]:
+def _demo_price(location: str, is_self: bool, checkin: date,
+                checkout: date, adults: int, seed_str: str) -> dict:
+    """Generate realistic demo price based on location and season."""
     nights = (checkout - checkin).days or 1
-    base = {2: 1.0, 3: 1.35, 4: 1.65}.get(adults, 1.0)
-    month = checkin.month
+    base_map = {
+        "Ankaran": 70, "Portorož": 90, "Izola": 65,
+        "Strunjan": 60, "Fiesa": 55, "Koper": 50,
+    }
+    base_night = base_map.get(location, 65)
+    adult_mult = {2: 1.0, 3: 1.35, 4: 1.65}.get(adults, 1.0)
+    month  = checkin.month
     season = 1.5 if month in (7, 8) else 1.2 if month in (6, 9) else 0.75
 
-    def price(base_night, spread=0.15):
-        raw = base_night * adults * base * season * nights
-        random.seed((checkin.toordinal() + adults + int(base_night)) % 1000)
-        noise = random.uniform(1 - spread, 1 + spread)
-        return round(raw * noise, 0)
+    random.seed(hash(seed_str + str(checkin) + str(adults)) % 99999)
+    noise     = random.uniform(0.88, 1.12)
+    total     = round(base_night * adult_mult * season * nights * noise, 0)
+    stars_map = {"Ankaran": 4, "Portorož": 4, "Izola": 3,
+                 "Strunjan": 3, "Fiesa": 3, "Koper": 3}
 
-    properties = [
-        {"name": "Adria Ankaran Resort & Spa",  "region": "SI – Ankaran",  "stars": 4, "base_night": 65,  "is_self": True,  "rating": 8.1},
-        {"name": "Kempinski Palace Portorož",   "region": "SI – Portorož", "stars": 5, "base_night": 165, "is_self": False, "rating": 9.0},
-        {"name": "Hotel Riviera Portorož",      "region": "SI – Portorož", "stars": 4, "base_night": 90,  "is_self": False, "rating": 8.3},
-        {"name": "Hotel Piran",                 "region": "SI – Piran",    "stars": 4, "base_night": 75,  "is_self": False, "rating": 8.6},
-        {"name": "Hotel Tartini Piran",         "region": "SI – Piran",    "stars": 3, "base_night": 55,  "is_self": False, "rating": 8.0},
-        {"name": "Hostel Bernot",               "region": "SI – Ankaran",  "stars": 2, "base_night": 28,  "is_self": False, "rating": 7.4},
-        {"name": "Hotel Lone Rovinj",           "region": "HR – Rovinj",   "stars": 5, "base_night": 145, "is_self": False, "rating": 8.9},
-        {"name": "Hotel Monte Mulini Rovinj",   "region": "HR – Rovinj",   "stars": 5, "base_night": 155, "is_self": False, "rating": 9.1},
-        {"name": "Maistra Resort Rovinj",       "region": "HR – Rovinj",   "stars": 4, "base_night": 95,  "is_self": False, "rating": 8.5},
-        {"name": "Valamar Riviera Poreč",       "region": "HR – Poreč",    "stars": 4, "base_night": 85,  "is_self": False, "rating": 8.2},
-        {"name": "Sol Garden Istra Poreč",      "region": "HR – Poreč",    "stars": 4, "base_night": 80,  "is_self": False, "rating": 8.0},
-        {"name": "Hotel Parentino Poreč",       "region": "HR – Poreč",    "stars": 3, "base_night": 58,  "is_self": False, "rating": 7.8},
-        {"name": "Falkensteiner Punta Skala",   "region": "HR – Zadar",    "stars": 5, "base_night": 130, "is_self": False, "rating": 9.0},
-        {"name": "Boutique Hotel Orsula Split", "region": "HR – Split",    "stars": 4, "base_night": 105, "is_self": False, "rating": 8.7},
-    ]
+    return {
+        "price_eur": total,
+        "per_night": round(total / nights, 2),
+        "stars":     stars_map.get(location, 3),
+        "rating":    round(random.uniform(7.5, 9.2), 1),
+        "source":    "demo",
+    }
 
-    out = []
-    for p in properties:
-        total = price(p["base_night"])
-        out.append({
-            "name": p["name"], "region": p["region"], "stars": p["stars"], "rating": p["rating"],
-            "adults": adults, "nights": nights, "price_eur": total, "per_night": round(total / nights, 2),
-            "is_self": p["is_self"], "source": "demo", "booking_url": "https://www.booking.com"
+
+def fetch_prices_for_segment(seg_key: str, sheet_df: pd.DataFrame,
+                              checkin: date, checkout: date,
+                              adults: int, token: str | None) -> list[dict]:
+    """Fetch prices for all properties in a segment."""
+    nights  = (checkout - checkin).days or 1
+    results = []
+
+    for _, row in sheet_df.iterrows():
+        name     = str(row.get("hotel", "")).strip()
+        is_self  = str(row.get("type", "")).strip().lower() == "self"
+        location = str(row.get("location", "")).strip()
+        url      = str(row.get("url", "")).strip()
+
+        price_data = None
+        if token and url and url.startswith("http"):
+            try:
+                price_data = _apify_fetch_url(url, checkin, checkout, adults, token)
+            except Exception:
+                pass
+
+        if not price_data:
+            price_data = _demo_price(location, is_self, checkin, checkout, adults, name)
+
+        results.append({
+            "name":        name,
+            "location":    location,
+            "is_self":     is_self,
+            "adults":      adults,
+            "nights":      nights,
+            "booking_url": url,
+            "segment":     seg_key,
+            **price_data,
         })
-    return out
 
-def stars_display(n):
-    return "⭐" * n if n else "–"
+    return results
 
-# ── Sidebar Settings ──────────────────────────────────────────────────────────
+
+# ── UI helpers ────────────────────────────────────────────────────────────────
+def stars_html(n):
+    return "⭐" * int(n) if n else "–"
+
+
+def render_price_cards(df: pd.DataFrame, seg_color: str, adult_counts: list):
+    for adults in adult_counts:
+        sub = df[df["adults"] == adults].sort_values("price_eur")
+        if sub.empty:
+            continue
+        st.markdown(f"### 👥 {adults} Adults")
+
+        self_vals = sub[sub["is_self"]]["price_eur"].values
+        self_ref  = float(self_vals[0]) if len(self_vals) else None
+
+        for _, row in sub.iterrows():
+            is_self = row["is_self"]
+            price   = row["price_eur"]
+
+            if is_self:
+                card_cls = "self_prop"
+                tag      = '<span class="tag tag-self">OUR PROPERTY</span>'
+            elif self_ref and price < self_ref * 0.95:
+                card_cls = "cheaper"
+                tag      = f'<span class="tag tag-cheaper">€{self_ref - price:.0f} cheaper</span>'
+            elif self_ref and price > self_ref * 1.05:
+                card_cls = "pricier"
+                tag      = f'<span class="tag tag-pricier">€{price - self_ref:.0f} pricier</span>'
+            else:
+                card_cls = ""
+                tag      = '<span class="tag tag-similar">similar price</span>'
+
+            bar_pct   = min(100, int(price / (sub["price_eur"].max() or 1) * 100))
+            bar_color = seg_color if is_self else "#1a7a9e"
+            url       = row.get("booking_url", "")
+            link_html = f'<a href="{url}" target="_blank" style="font-size:0.78rem;color:#1a7a9e;">🔗 Booking.com</a>' if url else ""
+
+            st.markdown(f"""
+<div class="property-card {card_cls}">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+    <div>
+      <b style="font-size:1.05rem;">{row['name']}</b> {tag}<br>
+      <span style="color:#666;font-size:0.85rem;">
+        {stars_html(row['stars'])} &nbsp;·&nbsp;
+        ⭐ {row['rating']} &nbsp;·&nbsp;
+        📍 {row['location']} &nbsp;·&nbsp; {link_html}
+      </span>
+    </div>
+    <div style="text-align:right;">
+      <span style="font-size:1.5rem;font-weight:700;color:#0a4f6e;">€{price:,.0f}</span><br>
+      <span style="color:#888;font-size:0.8rem;">€{row['per_night']:,.0f} / night</span>
+    </div>
+  </div>
+  <div style="margin-top:0.6rem;background:#eee;border-radius:4px;height:6px;">
+    <div style="width:{bar_pct}%;background:{bar_color};height:6px;border-radius:4px;"></div>
+  </div>
+</div>""", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+
+
+def render_table(df: pd.DataFrame):
+    disp = df[["name", "location", "stars", "rating", "adults",
+               "nights", "price_eur", "per_night", "is_self", "booking_url"]].copy()
+    disp.columns = ["Property", "Location", "Stars", "Rating",
+                    "Adults", "Nights", "Total €", "Per Night €", "Our Property", "Link"]
+    disp = disp.sort_values(["Adults", "Total €"])
+    disp["Stars"]        = disp["Stars"].apply(stars_html)
+    disp["Our Property"] = disp["Our Property"].apply(lambda x: "✅" if x else "")
+    st.dataframe(disp, use_container_width=True, hide_index=True,
+                 column_config={
+                     "Total €":     st.column_config.NumberColumn(format="€%.0f"),
+                     "Per Night €": st.column_config.NumberColumn(format="€%.0f"),
+                     "Rating":      st.column_config.NumberColumn(format="%.1f"),
+                     "Link":        st.column_config.LinkColumn("Booking.com"),
+                 })
+    csv = disp.to_csv(index=False).encode("utf-8")
+    st.download_button("⬇️ Download CSV", csv, "competitor_prices.csv", "text/csv")
+
+
+def render_charts(df: pd.DataFrame):
+    import altair as alt
+    chart_df = df.copy()
+    chart_df["label"] = chart_df["adults"].astype(str) + " adults"
+    chart_df["type"]  = chart_df["is_self"].apply(
+        lambda x: "Our Property" if x else "Competitor")
+
+    bar = (
+        alt.Chart(chart_df)
+        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+        .encode(
+            x=alt.X("name:N", sort="-y", title=None,
+                    axis=alt.Axis(labelAngle=-40, labelLimit=180)),
+            y=alt.Y("price_eur:Q", title="Total price (€)"),
+            color=alt.Color("type:N",
+                scale=alt.Scale(domain=["Our Property", "Competitor"],
+                                range=["#e8623a", "#1a7a9e"]),
+                legend=alt.Legend(title="")),
+            column=alt.Column("label:N", title="",
+                              header=alt.Header(labelFontSize=13)),
+            tooltip=["name", "location", "price_eur", "per_night", "adults"],
+        ).properties(height=320)
+    )
+    st.altair_chart(bar, use_container_width=False)
+
+
+# ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🌊 Search Settings")
     st.divider()
 
-    today = date.today()
-    default_in = today + timedelta(days=14)
+    today       = date.today()
+    default_in  = today + timedelta(days=14)
     default_out = default_in + timedelta(days=7)
 
-    checkin = st.date_input("Check-in", value=default_in, min_value=today)
-    checkout = st.date_input("Check-out", value=default_out, min_value=checkin + timedelta(days=1))
-    nights = (checkout - checkin).days
+    checkin  = st.date_input("Check-in",  value=default_in,  min_value=today)
+    checkout = st.date_input("Check-out", value=default_out,
+                             min_value=checkin + timedelta(days=1))
+    nights   = (checkout - checkin).days
     st.caption(f"📅 {nights} night{'s' if nights != 1 else ''}")
 
     st.divider()
     st.markdown("**Guests per room**")
     show_2 = st.checkbox("2 adults", value=True)
-    show_3 = st.checkbox("3 adults", value=True) 
+    show_3 = st.checkbox("3 adults", value=True)
     show_4 = st.checkbox("4 adults", value=True)
 
     st.divider()
-    region_filter = st.multiselect(
-        "Filter regions",
-        options=["SI – Ankaran", "SI – Portorož", "SI – Piran", "HR – Rovinj", "HR – Poreč", "HR – Zadar", "HR – Split"],
-        default=["SI – Ankaran", "SI – Portorož", "SI – Piran", "HR – Rovinj", "HR – Poreč"],
+    st.markdown("**🏨 Property segment**")
+    selected_segments = st.multiselect(
+        "Select segments to compare",
+        options=list(SHEETS.keys()),
+        default=list(SHEETS.keys()),
     )
-    stars_filter = st.slider("Minimum stars", 1, 5, 3)
 
     st.divider()
-    token_loaded = _get_apify_token()
-    if token_loaded:
-        st.success("✅ Secure Token loaded from secrets")
+    st.markdown("**🔑 Apify API Token**")
+    apify_input = st.text_input(
+        "Token for live Booking.com prices",
+        type="password",
+        placeholder="apify_api_xxxx…",
+        help="Free at apify.com. Leave blank for demo data.",
+    )
+    if apify_input:
+        import os; os.environ["APIFY_TOKEN"] = apify_input
+        st.success("✅ Live data enabled")
     else:
-        st.warning("⚠️ No Token detected in secrets config")
+        import os
+        if os.getenv("APIFY_TOKEN") or (hasattr(st, "secrets") and st.secrets.get("APIFY_TOKEN")):
+            st.success("✅ Token loaded from secrets")
+        else:
+            st.info("No token → demo data mode")
 
     st.divider()
-    if st.button("🔍 Fetch Prices", use_container_width=True):
-        st.session_state.search_clicked = True
-        st.session_state.df_data = None  
+    search_btn = st.button("🔍 Fetch Prices", use_container_width=True)
 
-# ── Hero Layout ───────────────────────────────────────────────────────────────
-st.markdown("""
-<div class="hero-banner">
-  <h1>Adria Ankaran – Competitor Monitor</h1>
-  <p>Coastal Slovenia & Istria Croatia · Room price comparison · Booking.com</p>
+    st.markdown("""
+<div class="info-box">
+<b>📊 Data source:</b> Competitor lists are loaded live from your
+<b>Google Sheet</b>. Edit the sheet to add/remove competitors —
+no code changes needed.
 </div>
 """, unsafe_allow_html=True)
 
-# ── Welcome Grid Validation ───────────────────────────────────────────────────
-if not st.session_state.search_clicked:
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.markdown('<div class="metric-card"><h4>📍 Coverage</h4><p>14 properties across Key Adriatic Sectors</p></div>', unsafe_allow_html=True)
-    with col2:
-        st.markdown('<div class="metric-card"><h4>👥 Configuration</h4><p>Compare room allocations from 2 to 4 adults</p></div>', unsafe_allow_html=True)
-    with col3:
-        st.markdown('<div class="metric-card"><h4>🔄 Source Routing</h4><p>Live scrapers running via automated API endpoints</p></div>', unsafe_allow_html=True)
-    st.info("👈 Select parameters and launch **Fetch Prices** to begin monitoring analytics.")
-    st.stop()
+# ── Hero ──────────────────────────────────────────────────────────────────────
+st.markdown("""
+<div class="hero-banner">
+  <h1>Adria Ankaran – Competitor Monitor</h1>
+  <p>Coastal Slovenia · Real-time price comparison by property segment · Booking.com</p>
+</div>
+""", unsafe_allow_html=True)
 
-# ── Session State Scraping Engine ─────────────────────────────────────────────
-if st.session_state.df_data is None:
-    adult_counts = [a for a, show in [(2, show_2), (3, show_3), (4, show_4)] if show]
-    if not adult_counts:
-        st.warning("Please select at least one guest configuration.")
-        st.stop()
-
-    all_data = []
-    
-    message_container = st.empty()
-    progress_bar = st.progress(0)
-    
-    message_container.markdown("⚙️ **System Status:** Initializing structural workers and cache managers...")
-    time.sleep(0.4)
-    
-    for i, adults in enumerate(adult_counts):
-        current_pct = i / len(adult_counts)
-        progress_bar.progress(current_pct)
-        
-        # FIXED: Named explicitly with an underscore inside the call to prevent Streamlit hashing
-        rows = scrape_booking_prices(
-            checkin, 
-            checkout, 
-            adults, 
-            "Ankaran, Slovenian Istria, Slovenia", 
-            _progress_element=message_container
-        )
-        all_data.extend(rows)
-        
-        if len(adult_counts) > 1 and i < len(adult_counts) - 1:
-            message_container.markdown("⏳ **System Status:** Cool-down padding active. Cooling proxies before next tier call...")
-            time.sleep(5)
-        
-    progress_bar.progress(1.0)
-    message_container.markdown("✅ **System Status:** Data compilation complete! Assembling user interface layouts...")
-    time.sleep(0.5)
-    
-    progress_bar.empty()
-    message_container.empty()
-    
-    st.session_state.df_data = pd.DataFrame(all_data)
-
-df = st.session_state.df_data.copy()
-
-if region_filter:
-    df = df[df["region"].isin(region_filter) | df["is_self"]]
-df = df[df["stars"] >= stars_filter]
-
-if df.empty:
-    st.warning("No data returned within active filter boundaries.")
-    if st.button("Reset Search"):
-        st.session_state.df_data = None
-        st.rerun()
-    st.stop()
-
-# ── KPI Block Rendering ───────────────────────────────────────────────────────
-adria_rows = df[df["is_self"]]
-comp_rows = df[~df["is_self"]]
-
-adria_avg = adria_rows["price_eur"].mean() if not adria_rows.empty else 0
-comp_avg = comp_rows["price_eur"].mean() if not comp_rows.empty else 0
-cheapest = comp_rows.loc[comp_rows["price_eur"].idxmin()] if not comp_rows.empty else None
-priciest = comp_rows.loc[comp_rows["price_eur"].idxmax()] if not comp_rows.empty else None
-
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Adria Ankaran Avg", f"€{adria_avg:,.0f}", delta=f"vs €{comp_avg:,.0f} Comps", delta_color="inverse" if adria_avg > comp_avg else "normal")
-c2.metric("Tracked Grouping", len(df["name"].unique()) - 1)
-c3.metric("Floor Competitor", f"€{cheapest['price_eur']:,.0f}" if cheapest is not None else "–", cheapest["name"] if cheapest is not None else "")
-c4.metric("Ceiling Competitor", f"€{priciest['price_eur']:,.0f}" if priciest is not None else "–", priciest["name"] if priciest is not None else "")
-
-st.caption(f"Status Matrix: {'🟢 API Production Data' if df['source'].iloc[0] == 'apify_live' else '🟡 Simulation Mode'} · {nights} Nights Stay Window")
-st.divider()
-
-# ── Dashboard Workspace Tabs ──────────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs(["📊 Price Comparison", "🗂️ Full Table", "📈 Charts"])
-
-with tab1:
-    for adults in sorted(df["adults"].unique()):
-        sub = df[df["adults"] == adults].sort_values("price_eur")
-        st.markdown(f"### 👥 Room Tier Allocation: {adults} Adults")
-
-        adria_price = sub[sub["is_self"]]["price_eur"].values
-        adria_ref = float(adria_price[0]) if len(adria_price) else None
-
-        for _, row in sub.iterrows():
-            is_self = row["is_self"]
-            price = row["price_eur"]
-
-            if is_self:
-                card_class, tag_html = "adria", '<span class="tag tag-adria">OUR PROPERTY</span>'
-            elif adria_ref and price < adria_ref * 0.95:
-                card_class, tag_html = "cheaper", f'<span class="tag tag-cheaper">€{adria_ref - price:.0f} under our floor</span>'
-            elif adria_ref and price > adria_ref * 1.05:
-                card_class, tag_html = "pricier", f'<span class="tag tag-pricier">€{price - adria_ref:.0f} over our premium</span>'
-            else:
-                card_class, tag_html = "", '<span class="tag tag-similar">Direct Match Zone</span>'
-
-            bar_pct = min(100, int(price / (sub["price_eur"].max() or 1) * 100))
-            bar_color = "#e8623a" if is_self else "#1a7a9e"
-
-            st.markdown(f"""
-            <div class="property-card {card_class}">
-              <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-                <div>
-                  <b style="font-size:1.05rem;">{row['name']}</b> {tag_html}<br>
-                  <span style="color:#666;font-size:0.85rem;">
-                    {stars_display(row['stars'])} &nbsp;·&nbsp; ⭐ {row['rating']} &nbsp;·&nbsp; {row['region']}
-                  </span>
-                </div>
-                <div style="text-align:right;">
-                  <span style="font-size:1.5rem;font-weight:700;color:#0a4f6e;">€{price:,.0f}</span><br>
-                  <span style="color:#888;font-size:0.8rem;">€{row['per_night']:,.0f}/Night value</span>
-                </div>
-              </div>
-              <div style="margin-top:0.6rem;background:#eee;border-radius:4px;height:6px;">
-                <div style="width:{bar_pct}%;background:{bar_color};height:6px;border-radius:4px;"></div>
-              </div>
+# ── Welcome screen ────────────────────────────────────────────────────────────
+if not search_btn:
+    cols = st.columns(len(SHEETS))
+    for i, (seg_key, seg) in enumerate(SHEETS.items()):
+        sheet_df = load_sheet(seg_key)
+        n_comp   = len(sheet_df[sheet_df["type"] == "competitor"]) if "type" in sheet_df.columns else "?"
+        with cols[i]:
+            st.markdown(f"""<div class="metric-card">
+                <h4>{seg_key}</h4>
+                <p style="color:#666;font-size:0.9rem;">{seg['description']}</p>
+                <p style="color:#1a7a9e;font-size:0.85rem;font-weight:600;">
+                {n_comp} competitors tracked</p>
             </div>""", unsafe_allow_html=True)
+    st.info("👈 Select dates, guests and segments, then click **Fetch Prices**.")
+    st.stop()
 
-with tab2:
-    display_df = df[["name", "region", "stars", "rating", "adults", "nights", "price_eur", "per_night", "is_self"]].copy()
-    display_df.columns = ["Property", "Region", "Stars", "Rating", "Adults", "Nights", "Total €", "Per Night €", "Our Target"]
-    display_df = display_df.sort_values(["Adults", "Total €"])
-    display_df["Stars"] = display_df["Stars"].apply(stars_display)
-    display_df["Our Target"] = display_df["Our Target"].apply(lambda x: "🎯" if x else "")
+# ── Validate ──────────────────────────────────────────────────────────────────
+adult_counts = [a for a, s in [(2, show_2), (3, show_3), (4, show_4)] if s]
+if not adult_counts:
+    st.warning("Select at least one guest configuration.")
+    st.stop()
+if not selected_segments:
+    st.warning("Select at least one property segment.")
+    st.stop()
 
-    st.dataframe(
-        display_df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Total €": st.column_config.NumberColumn(format="€%.0f"),
-            "Per Night €": st.column_config.NumberColumn(format="€%.0f"),
-            "Rating": st.column_config.NumberColumn(format="%.1f"),
-        },
-    )
-    st.download_button("⬇️ Export Structural CSV Data", display_df.to_csv(index=False).encode("utf-8"), "competitor_matrix.csv", "text/csv")
+# ── Fetch all data ────────────────────────────────────────────────────────────
+token    = _get_apify_token()
+all_data = {}
 
-with tab3:
-    import altair as alt
+total = len(selected_segments) * len(adult_counts)
+step  = 0
+prog  = st.progress(0, text="Loading competitor lists…")
 
-    chart_df = df[["name", "adults", "price_eur", "per_night", "is_self", "region"]].copy()
-    chart_df["label"] = chart_df["adults"].astype(str) + " guests"
-    chart_df["color"] = chart_df["is_self"].apply(lambda x: "Adria Ankaran" if x else "Competitor Vector")
+for seg_key in selected_segments:
+    sheet_df = load_sheet(seg_key)
+    seg_rows = []
+    for adults in adult_counts:
+        prog.progress(step / total,
+                      text=f"Fetching {seg_key} · {adults} adults…")
+        rows = fetch_prices_for_segment(
+            seg_key, sheet_df, checkin, checkout, adults, token)
+        seg_rows.extend(rows)
+        step += 1
+    all_data[seg_key] = pd.DataFrame(seg_rows)
 
-    st.markdown("#### Aggregate Stay Valuation across Comp Sets")
-    bar = (
-        alt.Chart(chart_df)
-        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
-        .encode(
-            x=alt.X("name:N", sort="-y", title=None, axis=alt.Axis(labelAngle=-45, labelLimit=150)),
-            y=alt.Y("price_eur:Q", title="Stay Cost (€)"),
-            color=alt.Color("color:N", scale=alt.Scale(domain=["Adria Ankaran", "Competitor Vector"], range=["#e8623a", "#1a7a9e"]), legend=alt.Legend(title="Allocation Hub")),
-            column=alt.Column("label:N", title=None),
-            tooltip=["name", "region", "price_eur"]
-        ).properties(height=320, width=280)
-    )
-    st.altair_chart(bar, use_container_width=False)
+prog.progress(1.0, text="Done!")
+time.sleep(0.3)
+prog.empty()
 
-    st.markdown("#### Verified Per-Night Price Distribution (Cleaned)")
-    box = (
-        alt.Chart(chart_df)
-        .mark_boxplot(extent="min-max", size=35)
-        .encode(
-            x=alt.X("label:N", title="Guest Structural Index"),
-            y=alt.Y("per_night:Q", title="Per-Night Rate (€)"),
-            color=alt.Color("color:N", scale=alt.Scale(domain=["Adria Ankaran", "Competitor Vector"], range=["#e8623a", "#1a7a9e"]))
-        ).properties(height=300)
-    )
-    st.altair_chart(box, use_container_width=True)
+src_label = "🟢 Live Booking.com data" if token else "🟡 Demo data (add Apify token for live prices)"
+st.caption(f"{src_label} · {nights} nights · {checkin} → {checkout}")
+
+# ── One tab per selected segment ──────────────────────────────────────────────
+seg_tabs = st.tabs(selected_segments)
+
+for tab, seg_key in zip(seg_tabs, selected_segments):
+    seg = SHEETS[seg_key]
+    df  = all_data[seg_key]
+
+    if df.empty:
+        with tab:
+            st.warning("No data for this segment.")
+        continue
+
+    self_rows = df[df["is_self"]]
+    comp_rows = df[~df["is_self"]]
+    self_avg  = self_rows["price_eur"].mean() if not self_rows.empty else 0
+    comp_avg  = comp_rows["price_eur"].mean() if not comp_rows.empty else 0
+    cheapest  = comp_rows.loc[comp_rows["price_eur"].idxmin()] if not comp_rows.empty else None
+    priciest  = comp_rows.loc[comp_rows["price_eur"].idxmax()] if not comp_rows.empty else None
+
+    with tab:
+        st.markdown(f"""
+<div class="segment-header">
+  <b style="color:{seg['color']};font-size:1.1rem;">{seg_key}</b>
+  &nbsp;·&nbsp;
+  <span style="color:#666;">{seg['description']}</span>
+</div>""", unsafe_allow_html=True)
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Our avg price", f"€{self_avg:,.0f}",
+                  delta=f"vs €{comp_avg:,.0f} market avg",
+                  delta_color="inverse" if self_avg > comp_avg else "normal")
+        c2.metric("Competitors tracked", len(comp_rows["name"].unique()))
+        c3.metric("Cheapest competitor",
+                  f"€{cheapest['price_eur']:,.0f}" if cheapest is not None else "–",
+                  cheapest["name"] if cheapest is not None else "")
+        c4.metric("Most expensive",
+                  f"€{priciest['price_eur']:,.0f}" if priciest is not None else "–",
+                  priciest["name"] if priciest is not None else "")
+
+        st.divider()
+
+        t1, t2, t3 = st.tabs(["📊 Price Comparison", "🗂️ Full Table", "📈 Charts"])
+        with t1:
+            render_price_cards(df, seg["color"], adult_counts)
+        with t2:
+            render_table(df)
+        with t3:
+            render_charts(df)
     
         
