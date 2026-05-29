@@ -19,17 +19,18 @@ SHEET_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRbx6EnzVBv0ZlRvF6
 
 SHEETS = {
     "🏰 Hotel Convent": {
-        "csv_url":     f"{SHEET_BASE}?gid=0&single=true&output=csv",
-        "color":       "#8e44ad",
+        "csv_url":    f"{SHEET_BASE}?gid=0&single=true&output=csv",
+        "color":      "#8e44ad",
         "description": "Historic convent hotel · Ankaran",
     },
     "🏡 Vile brez balkona": {
-        "csv_url":     f"{SHEET_BASE}?gid=1313360174&single=true&output=csv",
-        "color":       "#27ae60",
+        "csv_url":    f"{SHEET_BASE}?gid=1313360174&single=true&output=csv",
+        "color":      "#27ae60",
         "description": "Villas without balcony · Ankaran",
     },
 }
 
+# Hardcoded fallback data (from your sheet, used if Google Sheets is unreachable)
 FALLBACK_DATA = {
     "🏰 Hotel Convent": [
         {"hotel": "Hotel Convent",   "type": "self",       "location": "Ankaran",  "url": "https://www.booking.com/hotel/si/convent.sl.html"},
@@ -40,21 +41,14 @@ FALLBACK_DATA = {
         {"hotel": "Hotel Lucija",    "type": "competitor", "location": "Portorož", "url": "https://www.booking.com/hotel/si/lucija.sl.html"},
     ],
     "🏡 Vile brez balkona": [
-        {"hotel": "Vile brez Balkona",          "type": "self",       "location": "Ankaran", "url": "https://www.booking.com/hotel/si/depandansa-bor.sl.html"},
-        {"hotel": "Hotel Vile Park",            "type": "competitor", "location": "Portorož","url": "https://www.booking.com/hotel/si/vile-park.sl.html"},
-        {"hotel": "Depandanse San Simon",       "type": "competitor", "location": "Izola",   "url": "https://www.booking.com/hotel/si/san-simon-resort-depandances.sl.html"},
-        {"hotel": "Vile Krka Talasso Strunjan", "type": "competitor", "location": "Strunjan","url": "https://www.booking.com/hotel/si/vile-talaso-strunjan.sl.html"},
-        {"hotel": "Hotel Barbara Fiesa",        "type": "competitor", "location": "Fiesa",   "url": "https://www.booking.com/hotel/si/barbara-fiesa.sl"},
-        {"hotel": "Bio Hotel Koper",            "type": "competitor", "location": "Koper",   "url": "https://www.booking.com/hotel/si/bio.sl.html"},
+        {"hotel": "Vile brez Balkona",         "type": "self",       "location": "Ankaran", "url": "https://www.booking.com/hotel/si/depandansa-bor.sl.html"},
+        {"hotel": "Hotel Vile Park",           "type": "competitor", "location": "Portorož","url": "https://www.booking.com/hotel/si/vile-park.sl.html"},
+        {"hotel": "Depandanse San Simon",      "type": "competitor", "location": "Izola",   "url": "https://www.booking.com/hotel/si/san-simon-resort-depandances.sl.html"},
+        {"hotel": "Vile Krka Talasso Strunjan","type": "competitor", "location": "Strunjan","url": "https://www.booking.com/hotel/si/vile-talaso-strunjan.sl.html"},
+        {"hotel": "Hotel Barbara Fiesa",       "type": "competitor", "location": "Fiesa",   "url": "https://www.booking.com/hotel/si/barbara-fiesa.sl"},
+        {"hotel": "Bio Hotel Koper",           "type": "competitor", "location": "Koper",   "url": "https://www.booking.com/hotel/si/bio.sl.html"},
     ],
 }
-
-MEAL_PLANS = [
-    {"label": "🛏️ Room only",   "key": "room_only",   "multiplier": 1.00},
-    {"label": "🍳 Bed & Breakfast", "key": "bb",       "multiplier": 1.18},
-    {"label": "🍽️ Half Board",  "key": "hb",          "multiplier": 1.38},
-    {"label": "🍴 Full Board",   "key": "fb",          "multiplier": 1.55},
-]
 
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -94,13 +88,6 @@ h1, h2, h3 { font-family: 'DM Serif Display', serif; }
 .tag-pricier { background: #fde8e0; color: #a93226; }
 .tag-similar { background: #d6eaf8; color: #1a5276; }
 
-.meal-pill {
-    display: inline-block; margin: 2px 4px 2px 0; padding: 3px 10px;
-    border-radius: 12px; font-size: 0.75rem; background: #f0f4f8; color: #444;
-    border: 1px solid #dde3ea;
-}
-.meal-pill.cheapest { background: #e8f5e9; border-color: #a5d6a7; color: #2e7d32; font-weight:600; }
-
 .segment-header {
     background: white; border-radius: 10px; padding: 0.8rem 1.2rem;
     margin-bottom: 1rem; border-left: 5px solid #1a7a9e;
@@ -119,32 +106,21 @@ h1, h2, h3 { font-family: 'DM Serif Display', serif; }
 </style>
 """, unsafe_allow_html=True)
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-def fix_encoding(s: str) -> str:
-    """Fix mojibake like PortoroÅ¾ → Portorož"""
-    try:
-        return s.encode("latin-1").decode("utf-8")
-    except Exception:
-        return s
-
-
+# ── Load sheet data ───────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def load_sheet(seg_key: str) -> pd.DataFrame:
+    """Load competitor list from Google Sheet CSV. Falls back to hardcoded data."""
     try:
-        url  = SHEETS[seg_key]["csv_url"]
+        url = SHEETS[seg_key]["csv_url"]
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
-        df   = pd.read_csv(io.StringIO(resp.text))
+        df = pd.read_csv(io.StringIO(resp.text))
         df.columns = [c.strip().lower() for c in df.columns]
-        # Fix encoding in all string columns
-        for col in df.select_dtypes(include="object").columns:
-            df[col] = df[col].astype(str).apply(fix_encoding)
         return df
     except Exception:
         return pd.DataFrame(FALLBACK_DATA[seg_key])
 
-
+# ── Apify helpers ─────────────────────────────────────────────────────────────
 def _get_apify_token():
     import os
     try:
@@ -154,10 +130,10 @@ def _get_apify_token():
 
 
 def _apify_fetch_url(booking_url: str, checkin: date, checkout: date,
-                     adults: int, token: str) -> list[dict]:
+                     adults: int, token: str) -> dict | None:
     """
-    Fetch all room types for a single Booking.com URL via Apify.
-    Returns list of dicts (one per room/meal plan variant).
+    Fetch price for a single Booking.com property URL via Apify.
+    Returns dict with price info or None on failure.
     """
     from apify_client import ApifyClient
     client = ApifyClient(token)
@@ -169,36 +145,37 @@ def _apify_fetch_url(booking_url: str, checkin: date, checkout: date,
         "checkout":  checkout.strftime("%Y-%m-%d"),
         "adults":    adults,
         "rooms":     1,
+        "sortBy": "price",
         "currency":  "EUR",
         "language":  "en-us",
-        "maxResults": 5,
+        "maxResults": 1,
     }
 
-    run   = client.actor("automation-lab/booking-scraper").call(
-        run_input=run_input, wait_secs=120)
-    items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+    try:
+        run = client.actor("automation-lab/booking-scraper").call(
+            run_input=run_input,
+            wait_secs=120,
+        )
+        items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+        if items:
+            h = items[0]
+            price_eur = float(h.get("price") or 0)
+            return {
+                "price_eur": price_eur,
+                "per_night": float(h.get("pricePerNight") or (price_eur / nights if nights else 0)),
+                "stars":     int(h.get("starRating") or 0),
+                "rating":    float(h.get("reviewScore") or 0),
+                "source":    "apify_live",
+            }
+    except Exception:
+        pass
+    return None
 
-    results = []
-    for h in items:
-        price_eur = float(h.get("price") or 0)
-        if price_eur == 0:
-            continue
-        results.append({
-            "price_eur":  price_eur,
-            "per_night":  float(h.get("pricePerNight") or round(price_eur / nights, 2)),
-            "stars":      int(h.get("starRating") or 0),
-            "rating":     float(h.get("reviewScore") or 0),
-            "meal_plan":  h.get("mealPlan") or h.get("roomType") or "Room only",
-            "room_type":  h.get("roomType") or "",
-            "source":     "apify_live",
-        })
-    return results
 
-
-def _demo_room_types(location: str, checkin: date, checkout: date,
-                     adults: int, name: str) -> list[dict]:
-    """Generate demo prices for all 4 meal plans for one hotel."""
-    nights   = (checkout - checkin).days or 1
+def _demo_price(location: str, is_self: bool, checkin: date,
+                checkout: date, adults: int, seed_str: str) -> dict:
+    """Generate realistic demo price based on location and season."""
+    nights = (checkout - checkin).days or 1
     base_map = {
         "Ankaran": 70, "Portorož": 90, "Izola": 65,
         "Strunjan": 60, "Fiesa": 55, "Koper": 50,
@@ -207,160 +184,125 @@ def _demo_room_types(location: str, checkin: date, checkout: date,
     adult_mult = {2: 1.0, 3: 1.35, 4: 1.65}.get(adults, 1.0)
     month  = checkin.month
     season = 1.5 if month in (7, 8) else 1.2 if month in (6, 9) else 0.75
+
+    random.seed(hash(seed_str + str(checkin) + str(adults)) % 99999)
+    noise     = random.uniform(0.88, 1.12)
+    total     = round(base_night * adult_mult * season * nights * noise, 0)
     stars_map = {"Ankaran": 4, "Portorož": 4, "Izola": 3,
                  "Strunjan": 3, "Fiesa": 3, "Koper": 3}
 
-    random.seed(hash(name + str(checkin) + str(adults)) % 99999)
-    base_total = base_night * adult_mult * season * nights * random.uniform(0.9, 1.1)
-    rating     = round(random.uniform(7.4, 9.2), 1)
-    stars      = stars_map.get(location, 3)
-
-    results = []
-    for plan in MEAL_PLANS:
-        total = round(base_total * plan["multiplier"], 0)
-        results.append({
-            "price_eur": total,
-            "per_night": round(total / nights, 2),
-            "stars":     stars,
-            "rating":    rating,
-            "meal_plan": plan["label"],
-            "room_type": plan["label"],
-            "source":    "demo",
-        })
-    return results
+    return {
+        "price_eur": total,
+        "per_night": round(total / nights, 2),
+        "stars":     stars_map.get(location, 3),
+        "rating":    round(random.uniform(7.5, 9.2), 1),
+        "source":    "demo",
+    }
 
 
 def fetch_prices_for_segment(seg_key: str, sheet_df: pd.DataFrame,
                               checkin: date, checkout: date,
                               adults: int, token: str | None) -> list[dict]:
+    """Fetch prices for all properties in a segment."""
     nights  = (checkout - checkin).days or 1
     results = []
 
     for _, row in sheet_df.iterrows():
-        name     = fix_encoding(str(row.get("hotel", "")).strip())
+        name     = str(row.get("hotel", "")).strip()
         is_self  = str(row.get("type", "")).strip().lower() == "self"
-        location = fix_encoding(str(row.get("location", "")).strip())
+        location = str(row.get("location", "")).strip()
         url      = str(row.get("url", "")).strip()
 
-        room_variants = []
-        if token and url.startswith("http"):
+        price_data = None
+        if token and url and url.startswith("http"):
             try:
-                room_variants = _apify_fetch_url(url, checkin, checkout, adults, token)
-            except Exception as e:
-                st.warning(f"Apify error for {name}: {e}")
+                price_data = _apify_fetch_url(url, checkin, checkout, adults, token)
+            except Exception:
+                pass
 
-        if not room_variants:
-            room_variants = _demo_room_types(location, checkin, checkout, adults, name)
+        if not price_data:
+            price_data = _demo_price(location, is_self, checkin, checkout, adults, name)
 
-        for rv in room_variants:
-            results.append({
-                "name":        name,
-                "location":    location,
-                "is_self":     is_self,
-                "adults":      adults,
-                "nights":      nights,
-                "booking_url": url,
-                "segment":     seg_key,
-                **rv,
-            })
+        results.append({
+            "name":        name,
+            "location":    location,
+            "is_self":     is_self,
+            "adults":      adults,
+            "nights":      nights,
+            "booking_url": url,
+            "segment":     seg_key,
+            **price_data,
+        })
 
     return results
 
 
+# ── UI helpers ────────────────────────────────────────────────────────────────
 def stars_html(n):
     return "⭐" * int(n) if n else "–"
 
 
 def render_price_cards(df: pd.DataFrame, seg_color: str, adult_counts: list):
-    """One card per hotel, showing cheapest price + all meal plan options."""
     for adults in adult_counts:
-        sub = df[df["adults"] == adults]
+        sub = df[df["adults"] == adults].sort_values("price_eur")
         if sub.empty:
             continue
         st.markdown(f"### 👥 {adults} Adults")
 
-        # Get cheapest price per hotel for sorting & reference
-        cheapest_per_hotel = (
-            sub.groupby("name")["price_eur"].min().reset_index()
-               .rename(columns={"price_eur": "min_price"})
-        )
-        sub = sub.merge(cheapest_per_hotel, on="name")
+        self_vals = sub[sub["is_self"]]["price_eur"].values
+        self_ref  = float(self_vals[0]) if len(self_vals) else None
 
-        # One card per hotel (use cheapest row for main display)
-        hotels = sub.sort_values("min_price")["name"].unique()
-
-        self_ref = None
-        self_rows = sub[sub["is_self"]]
-        if not self_rows.empty:
-            self_ref = float(self_rows["min_price"].iloc[0])
-
-        for hotel_name in hotels:
-            hotel_rows = sub[sub["name"] == hotel_name]
-            base       = hotel_rows.iloc[0]
-            is_self    = bool(base["is_self"])
-            min_price  = float(base["min_price"])
+        for _, row in sub.iterrows():
+            is_self = row["is_self"]
+            price   = row["price_eur"]
 
             if is_self:
                 card_cls = "self_prop"
                 tag      = '<span class="tag tag-self">OUR PROPERTY</span>'
-            elif self_ref and min_price < self_ref * 0.95:
+            elif self_ref and price < self_ref * 0.95:
                 card_cls = "cheaper"
-                tag      = f'<span class="tag tag-cheaper">€{self_ref - min_price:.0f} cheaper</span>'
-            elif self_ref and min_price > self_ref * 1.05:
+                tag      = f'<span class="tag tag-cheaper">€{self_ref - price:.0f} cheaper</span>'
+            elif self_ref and price > self_ref * 1.05:
                 card_cls = "pricier"
-                tag      = f'<span class="tag tag-pricier">€{min_price - self_ref:.0f} pricier</span>'
+                tag      = f'<span class="tag tag-pricier">€{price - self_ref:.0f} pricier</span>'
             else:
                 card_cls = ""
                 tag      = '<span class="tag tag-similar">similar price</span>'
 
-            max_price = sub["min_price"].max() or 1
-            bar_pct   = min(100, int(min_price / max_price * 100))
+            bar_pct   = min(100, int(price / (sub["price_eur"].max() or 1) * 100))
             bar_color = seg_color if is_self else "#1a7a9e"
-            url       = base.get("booking_url", "")
+            url       = row.get("booking_url", "")
             link_html = f'<a href="{url}" target="_blank" style="font-size:0.78rem;color:#1a7a9e;">🔗 Booking.com</a>' if url else ""
-
-            # Build meal plan pills
-            meal_pills = ""
-            for _, mrow in hotel_rows.sort_values("price_eur").iterrows():
-                is_cheapest = mrow["price_eur"] == min_price
-                cls = "meal-pill cheapest" if is_cheapest else "meal-pill"
-                meal_pills += f'<span class="{cls}">{mrow["meal_plan"]} · <b>€{mrow["price_eur"]:,.0f}</b></span>'
 
             st.markdown(f"""
 <div class="property-card {card_cls}">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;">
-    <div style="flex:1;">
-      <b style="font-size:1.05rem;">{hotel_name}</b> {tag}<br>
+    <div>
+      <b style="font-size:1.05rem;">{row['name']}</b> {tag}<br>
       <span style="color:#666;font-size:0.85rem;">
-        {stars_html(base['stars'])} &nbsp;·&nbsp;
-        ⭐ {base['rating']} &nbsp;·&nbsp;
-        📍 {base['location']} &nbsp;·&nbsp; {link_html}
+        {stars_html(row['stars'])} &nbsp;·&nbsp;
+        ⭐ {row['rating']} &nbsp;·&nbsp;
+        📍 {row['location']} &nbsp;·&nbsp; {link_html}
       </span>
-      <div style="margin-top:0.5rem;">{meal_pills}</div>
     </div>
-    <div style="text-align:right;min-width:110px;">
-      <span style="font-size:0.75rem;color:#888;">from</span><br>
-      <span style="font-size:1.5rem;font-weight:700;color:#0a4f6e;">€{min_price:,.0f}</span><br>
-      <span style="color:#888;font-size:0.8rem;">€{hotel_rows['per_night'].min():,.0f} / night</span>
+    <div style="text-align:right;">
+      <span style="font-size:1.5rem;font-weight:700;color:#0a4f6e;">€{price:,.0f}</span><br>
+      <span style="color:#888;font-size:0.8rem;">€{row['per_night']:,.0f} / night</span>
     </div>
   </div>
-  <div style="margin-top:0.7rem;background:#eee;border-radius:4px;height:6px;">
+  <div style="margin-top:0.6rem;background:#eee;border-radius:4px;height:6px;">
     <div style="width:{bar_pct}%;background:{bar_color};height:6px;border-radius:4px;"></div>
   </div>
 </div>""", unsafe_allow_html=True)
-
         st.markdown("<br>", unsafe_allow_html=True)
 
 
 def render_table(df: pd.DataFrame):
-    """Full table with one row per hotel+meal plan combo."""
-    disp = df[["name", "location", "stars", "rating", "meal_plan",
-               "adults", "nights", "price_eur", "per_night",
-               "is_self", "booking_url"]].copy()
-    disp.columns = ["Property", "Location", "Stars", "Rating", "Meal Plan",
-                    "Adults", "Nights", "Total €", "Per Night €",
-                    "Our Property", "Link"]
-    disp = disp.sort_values(["Adults", "Property", "Total €"])
+    disp = df[["name", "location", "stars", "rating", "adults",
+               "nights", "price_eur", "per_night", "is_self", "booking_url"]].copy()
+    disp.columns = ["Property", "Location", "Stars", "Rating",
+                    "Adults", "Nights", "Total €", "Per Night €", "Our Property", "Link"]
+    disp = disp.sort_values(["Adults", "Total €"])
     disp["Stars"]        = disp["Stars"].apply(stars_html)
     disp["Our Property"] = disp["Our Property"].apply(lambda x: "✅" if x else "")
     st.dataframe(disp, use_container_width=True, hide_index=True,
@@ -376,15 +318,11 @@ def render_table(df: pd.DataFrame):
 
 def render_charts(df: pd.DataFrame):
     import altair as alt
-
-    # Use cheapest price per hotel per adult count
-    chart_df = (df.groupby(["name", "adults", "is_self", "location"])["price_eur"]
-                  .min().reset_index())
+    chart_df = df.copy()
     chart_df["label"] = chart_df["adults"].astype(str) + " adults"
     chart_df["type"]  = chart_df["is_self"].apply(
         lambda x: "Our Property" if x else "Competitor")
 
-    st.markdown("#### Cheapest rate per hotel by guest count")
     bar = (
         alt.Chart(chart_df)
         .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
@@ -398,32 +336,10 @@ def render_charts(df: pd.DataFrame):
                 legend=alt.Legend(title="")),
             column=alt.Column("label:N", title="",
                               header=alt.Header(labelFontSize=13)),
-            tooltip=["name", "location", "price_eur", "adults"],
+            tooltip=["name", "location", "price_eur", "per_night", "adults"],
         ).properties(height=320)
     )
     st.altair_chart(bar, use_container_width=False)
-
-    # Meal plan comparison for selected hotel
-    st.markdown("#### Meal plan price comparison")
-    hotel_names = sorted(df["name"].unique().tolist())
-    selected_hotel = st.selectbox("Select hotel", hotel_names)
-    h_df = df[df["name"] == selected_hotel].copy()
-    h_df["label"] = h_df["adults"].astype(str) + " adults"
-
-    meal_bar = (
-        alt.Chart(h_df)
-        .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
-        .encode(
-            x=alt.X("meal_plan:N", title=None,
-                    axis=alt.Axis(labelAngle=-20)),
-            y=alt.Y("price_eur:Q", title="Total price (€)"),
-            color=alt.Color("meal_plan:N", legend=None),
-            column=alt.Column("label:N", title="",
-                              header=alt.Header(labelFontSize=13)),
-            tooltip=["meal_plan", "price_eur", "per_night", "adults"],
-        ).properties(height=260, width=160)
-    )
-    st.altair_chart(meal_bar, use_container_width=False)
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -446,16 +362,6 @@ with st.sidebar:
     show_2 = st.checkbox("2 adults", value=True)
     show_3 = st.checkbox("3 adults", value=True)
     show_4 = st.checkbox("4 adults", value=True)
-
-    st.divider()
-    st.markdown("**🍽️ Meal plan filter**")
-    meal_options = [p["label"] for p in MEAL_PLANS]
-    selected_meals = st.multiselect(
-        "Show meal plans",
-        options=meal_options,
-        default=meal_options,
-        help="Filter which meal plan types to display",
-    )
 
     st.divider()
     st.markdown("**🏨 Property segment**")
@@ -488,8 +394,9 @@ with st.sidebar:
 
     st.markdown("""
 <div class="info-box">
-<b>📊 Tip:</b> Competitor lists load live from your Google Sheet.
-Edit the sheet to add/remove hotels — no code changes needed.
+<b>📊 Data source:</b> Competitor lists are loaded live from your
+<b>Google Sheet</b>. Edit the sheet to add/remove competitors —
+no code changes needed.
 </div>
 """, unsafe_allow_html=True)
 
@@ -497,7 +404,7 @@ Edit the sheet to add/remove hotels — no code changes needed.
 st.markdown("""
 <div class="hero-banner">
   <h1>Adria Ankaran – Competitor Monitor</h1>
-  <p>Coastal Slovenia · Real-time price comparison by segment & meal plan · Booking.com</p>
+  <p>Coastal Slovenia · Real-time price comparison by property segment · Booking.com</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -512,7 +419,7 @@ if not search_btn:
                 <h4>{seg_key}</h4>
                 <p style="color:#666;font-size:0.9rem;">{seg['description']}</p>
                 <p style="color:#1a7a9e;font-size:0.85rem;font-weight:600;">
-                {n_comp} competitors · 4 meal plans each</p>
+                {n_comp} competitors tracked</p>
             </div>""", unsafe_allow_html=True)
     st.info("👈 Select dates, guests and segments, then click **Fetch Prices**.")
     st.stop()
@@ -526,12 +433,13 @@ if not selected_segments:
     st.warning("Select at least one property segment.")
     st.stop()
 
-# ── Fetch ─────────────────────────────────────────────────────────────────────
+# ── Fetch all data ────────────────────────────────────────────────────────────
 token    = _get_apify_token()
 all_data = {}
-total    = len(selected_segments) * len(adult_counts)
-step     = 0
-prog     = st.progress(0, text="Loading competitor lists…")
+
+total = len(selected_segments) * len(adult_counts)
+step  = 0
+prog  = st.progress(0, text="Loading competitor lists…")
 
 for seg_key in selected_segments:
     sheet_df = load_sheet(seg_key)
@@ -549,29 +457,23 @@ prog.progress(1.0, text="Done!")
 time.sleep(0.3)
 prog.empty()
 
-src = "🟢 Live Booking.com data" if token else "🟡 Demo data (add Apify token for live prices)"
-st.caption(f"{src} · {nights} nights · {checkin} → {checkout}")
+src_label = "🟢 Live Booking.com data" if token else "🟡 Demo data (add Apify token for live prices)"
+st.caption(f"{src_label} · {nights} nights · {checkin} → {checkout}")
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
+# ── One tab per selected segment ──────────────────────────────────────────────
 seg_tabs = st.tabs(selected_segments)
 
 for tab, seg_key in zip(seg_tabs, selected_segments):
     seg = SHEETS[seg_key]
     df  = all_data[seg_key]
 
-    # Apply meal plan filter
-    if selected_meals:
-        df = df[df["meal_plan"].isin(selected_meals)]
-
     if df.empty:
         with tab:
             st.warning("No data for this segment.")
         continue
 
-    # KPIs (cheapest rate per hotel)
-    best = df.groupby(["name", "is_self", "adults"])["price_eur"].min().reset_index()
-    self_rows = best[best["is_self"]]
-    comp_rows = best[~best["is_self"]]
+    self_rows = df[df["is_self"]]
+    comp_rows = df[~df["is_self"]]
     self_avg  = self_rows["price_eur"].mean() if not self_rows.empty else 0
     comp_avg  = comp_rows["price_eur"].mean() if not comp_rows.empty else 0
     cheapest  = comp_rows.loc[comp_rows["price_eur"].idxmin()] if not comp_rows.empty else None
@@ -606,6 +508,12 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
             render_table(df)
         with t3:
             render_charts(df)
+    
+        
+     
+
+
+
     
         
   
