@@ -174,19 +174,12 @@ def _apify_fetch_url(booking_url: str, checkin: date, checkout: date,
         "maxResults": 5,
     }
 
-    # Hand over control back to Python after 60 seconds
-run = client.actor("automation-lab/booking-scraper").call(
-    run_input=run_input, 
-    wait_secs=60, 
-    timeout_secs=300
-)
+    run   = client.actor("automation-lab/booking-scraper").call(
+        run_input=run_input, wait_secs=60, timeout_secs=300)
 
-# ... Do some other Python work here while the scraper runs in the cloud ...
-
-# Crucial: You MUST explicitly wait for it to finish before fetching items
-client.run(run["id"]).wait_for_finish()
-
-items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+    client.run(run["id"]).wait_for_finish()
+    
+    items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
 
     results = []
     for h in items:
