@@ -5,6 +5,7 @@ import time
 import random
 import requests
 import io
+import os
 
 # ── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -30,7 +31,7 @@ SHEETS = {
     },
 }
 
-# Hardcoded fallback data (from your sheet, used if Google Sheets is unreachable)
+# Hardcoded fallback data (used if Google Sheets is unreachable)
 FALLBACK_DATA = {
     "🏰 Hotel Convent": [
         {"hotel": "Hotel Convent",   "type": "self",       "location": "Ankaran",  "url": "https://www.booking.com/hotel/si/convent.sl.html"},
@@ -122,7 +123,6 @@ def load_sheet(seg_key: str) -> pd.DataFrame:
 
 # ── Apify helpers ─────────────────────────────────────────────────────────────
 def _get_apify_token():
-    import os
     try:
         return st.secrets.get("APIFY_TOKEN") or os.getenv("APIFY_TOKEN")
     except Exception:
@@ -130,31 +130,40 @@ def _get_apify_token():
 
 
 def _apify_fetch_url(booking_url: str, checkin: date, checkout: date,
-                     adults: int, token: str) -> dict | None:
+                     adults: int, children: int, token: str) -> dict | None:
     """
-    Fetch price for a single Booking.com property URL via Apify.
+    Fetch price for a single Booking.com property URL via voyager/fast-booking-scraper.
     Returns dict with price info or None on failure.
     """
     from apify_client import ApifyClient
     client = ApifyClient(token)
     nights = (checkout - checkin).days or 1
 
+    # Define standard ages for kids so Booking can accurately parse specific family configurations
+    if children == 1:
+        children_ages = [5]
+    elif children == 2:
+        children_ages = [5, 10]
+    else:
+        children_ages = []
+
     run_input = {
         "startUrls": [{"url": booking_url}],
-        "checkin":   checkin.strftime("%Y-%m-%d"),
-        "checkout":  checkout.strftime("%Y-%m-%d"),
-        "adults":    adults,
-        "rooms":     1,
-        "sortBy": "price",
-        "currency":  "EUR",
-        "language":  "en-us",
-        "maxResults": 1,
+        "checkIn": checkin.strftime("%Y-%m-%d"),
+        "checkOut": checkout.strftime("%Y-%m-%d"),
+        "adults": adults,
+        "children": children,
+        "childrenAges": children_ages,
+        "rooms": 1,
+        "currency": "EUR",
+        "language": "en-gb",
+        "maxItems": 1,
     }
 
     try:
-        run = client.actor("automation-lab/booking-scraper").call(
+        run = client.actor("voyager/fast-booking-scraper").call(
             run_input=run_input,
-            wait_secs=120,
+            wait_secs=60,
         )
         items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
         if items:
@@ -173,21 +182,28 @@ def _apify_fetch_url(booking_url: str, checkin: date, checkout: date,
 
 
 def _demo_price(location: str, is_self: bool, checkin: date,
-                checkout: date, adults: int, seed_str: str) -> dict:
-    """Generate realistic demo price based on location and season."""
+                checkout: date, adults: int, children: int, seed_str: str) -> dict:
+    """Generate realistic demo price based on location, season, and guest numbers."""
     nights = (checkout - checkin).days or 1
     base_map = {
         "Ankaran": 70, "Portorož": 90, "Izola": 65,
         "Strunjan": 60, "Fiesa": 55, "Koper": 50,
     }
     base_night = base_map.get(location, 65)
-    adult_mult = {2: 1.0, 3: 1.35, 4: 1.65}.get(adults, 1.0)
+    
+    # Calculate guest pricing scaling factors
+    adult_mult = 1.0  # structured around a baseline configuration of 2 adults
+    child_addon = children * 0.15  # Add an estimated 15% pricing increase per child
+    
     month  = checkin.month
     season = 1.5 if month in (7, 8) else 1.2 if month in (6, 9) else 0.75
 
-    random.seed(hash(seed_str + str(checkin) + str(adults)) % 99999)
+    random.seed(hash(seed_str + str(checkin) + f"_{adults}a_{children}c") % 99999)
     noise     = random.uniform(0.88, 1.12)
-    total     = round(base_night * adult_mult * season * nights * noise, 0)
+    
+    total_nightly = base_night * adult_mult * (1.0 + child_addon) * season * noise
+    total     = round(total_nightly * nights, 0)
+    
     stars_map = {"Ankaran": 4, "Portorož": 4, "Izola": 3,
                  "Strunjan": 3, "Fiesa": 3, "Koper": 3}
 
@@ -201,8 +217,8 @@ def _demo_price(location: str, is_self: bool, checkin: date,
 
 
 def fetch_prices_for_segment(seg_key: str, sheet_df: pd.DataFrame,
-                              checkin: date, checkout: date,
-                              adults: int, token: str | None) -> list[dict]:
+                             checkin: date, checkout: date,
+                             adults: int, children: int, token: str | None) -> list[dict]:
     """Fetch prices for all properties in a segment."""
     nights  = (checkout - checkin).days or 1
     results = []
@@ -216,18 +232,28 @@ def fetch_prices_for_segment(seg_key: str, sheet_df: pd.DataFrame,
         price_data = None
         if token and url and url.startswith("http"):
             try:
-                price_data = _apify_fetch_url(url, checkin, checkout, adults, token)
+                price_data = _apify_fetch_url(url, checkin, checkout, adults, children, token)
             except Exception:
                 pass
 
         if not price_data:
-            price_data = _demo_price(location, is_self, checkin, checkout, adults, name)
+            price_data = _demo_price(location, is_self, checkin, checkout, adults, children, name)
+
+        # Build clean visual grouping label for the UI
+        if children == 0:
+            guest_label = f"👥 {adults} Adults"
+        elif children == 1:
+            guest_label = f"👪 {adults} Adults + 1 Child"
+        else:
+            guest_label = f"👨‍👩‍👧‍👦 {adults} Adults + {children} Children"
 
         results.append({
             "name":        name,
             "location":    location,
             "is_self":     is_self,
             "adults":      adults,
+            "children":    children,
+            "guest_label": guest_label,
             "nights":      nights,
             "booking_url": url,
             "segment":     seg_key,
@@ -242,12 +268,12 @@ def stars_html(n):
     return "⭐" * int(n) if n else "–"
 
 
-def render_price_cards(df: pd.DataFrame, seg_color: str, adult_counts: list):
-    for adults in adult_counts:
-        sub = df[df["adults"] == adults].sort_values("price_eur")
+def render_price_cards(df: pd.DataFrame, seg_color: str, unique_labels: list):
+    for label in unique_labels:
+        sub = df[df["guest_label"] == label].sort_values("price_eur")
         if sub.empty:
             continue
-        st.markdown(f"### 👥 {adults} Adults")
+        st.markdown(f"### {label}")
 
         self_vals = sub[sub["is_self"]]["price_eur"].values
         self_ref  = float(self_vals[0]) if len(self_vals) else None
@@ -298,16 +324,16 @@ def render_price_cards(df: pd.DataFrame, seg_color: str, adult_counts: list):
 
 
 def render_table(df: pd.DataFrame):
-    disp = df[["name", "location", "stars", "rating", "adults",
+    disp = df[["name", "location", "stars", "rating", "guest_label",
                "nights", "price_eur", "per_night", "is_self", "booking_url"]].copy()
     disp.columns = ["Property", "Location", "Stars", "Rating",
-                    "Adults", "Nights", "Total €", "Per Night €", "Our Property", "Link"]
-    disp = disp.sort_values(["Adults", "Total €"])
+                    "Configuration", "Nights", "Total €", "Per Night €", "Our Property", "Link"]
+    disp = disp.sort_values(["Configuration", "Total €"])
     disp["Stars"]        = disp["Stars"].apply(stars_html)
     disp["Our Property"] = disp["Our Property"].apply(lambda x: "✅" if x else "")
     st.dataframe(disp, use_container_width=True, hide_index=True,
                  column_config={
-                     "Total €":     st.column_config.NumberColumn(format="€%.0f"),
+                     "Total €":      st.column_config.NumberColumn(format="€%.0f"),
                      "Per Night €": st.column_config.NumberColumn(format="€%.0f"),
                      "Rating":      st.column_config.NumberColumn(format="%.1f"),
                      "Link":        st.column_config.LinkColumn("Booking.com"),
@@ -319,7 +345,6 @@ def render_table(df: pd.DataFrame):
 def render_charts(df: pd.DataFrame):
     import altair as alt
     chart_df = df.copy()
-    chart_df["label"] = chart_df["adults"].astype(str) + " adults"
     chart_df["type"]  = chart_df["is_self"].apply(
         lambda x: "Our Property" if x else "Competitor")
 
@@ -334,9 +359,9 @@ def render_charts(df: pd.DataFrame):
                 scale=alt.Scale(domain=["Our Property", "Competitor"],
                                 range=["#e8623a", "#1a7a9e"]),
                 legend=alt.Legend(title="")),
-            column=alt.Column("label:N", title="",
-                              header=alt.Header(labelFontSize=13)),
-            tooltip=["name", "location", "price_eur", "per_night", "adults"],
+            column=alt.Column("guest_label:N", title="",
+                header=alt.Header(labelFontSize=13)),
+            tooltip=["name", "location", "price_eur", "per_night", "guest_label"],
         ).properties(height=320)
     )
     st.altair_chart(bar, use_container_width=False)
@@ -359,9 +384,9 @@ with st.sidebar:
 
     st.divider()
     st.markdown("**Guests per room**")
-    show_2 = st.checkbox("2 adults", value=True)
-    show_3 = st.checkbox("3 adults", value=True)
-    show_4 = st.checkbox("4 adults", value=True)
+    show_2a = st.checkbox("2 Adults", value=True)
+    show_2a1c = st.checkbox("2 Adults + 1 Child", value=False)
+    show_2a2c = st.checkbox("2 Adults + 2 Children", value=False)
 
     st.divider()
     st.markdown("**🏨 Property segment**")
@@ -380,10 +405,9 @@ with st.sidebar:
         help="Free at apify.com. Leave blank for demo data.",
     )
     if apify_input:
-        import os; os.environ["APIFY_TOKEN"] = apify_input
+        os.environ["APIFY_TOKEN"] = apify_input
         st.success("✅ Live data enabled")
     else:
-        import os
         if os.getenv("APIFY_TOKEN") or (hasattr(st, "secrets") and st.secrets.get("APIFY_TOKEN")):
             st.success("✅ Token loaded from secrets")
         else:
@@ -424,9 +448,14 @@ if not search_btn:
     st.info("👈 Select dates, guests and segments, then click **Fetch Prices**.")
     st.stop()
 
-# ── Validate ──────────────────────────────────────────────────────────────────
-adult_counts = [a for a, s in [(2, show_2), (3, show_3), (4, show_4)] if s]
-if not adult_counts:
+# ── Validate guest structural selections ──────────────────────────────────────
+# guest_configs format maps explicit tuples out as: (Adults, Children)
+guest_configs = []
+if show_2a: guest_configs.append((2, 0))
+if show_2a1c: guest_configs.append((2, 1))
+if show_2a2c: guest_configs.append((2, 2))
+
+if not guest_configs:
     st.warning("Select at least one guest configuration.")
     st.stop()
 if not selected_segments:
@@ -437,18 +466,18 @@ if not selected_segments:
 token    = _get_apify_token()
 all_data = {}
 
-total = len(selected_segments) * len(adult_counts)
+total = len(selected_segments) * len(guest_configs)
 step  = 0
 prog  = st.progress(0, text="Loading competitor lists…")
 
 for seg_key in selected_segments:
     sheet_df = load_sheet(seg_key)
     seg_rows = []
-    for adults in adult_counts:
+    for adults, children in guest_configs:
         prog.progress(step / total,
-                      text=f"Fetching {seg_key} · {adults} adults…")
+                      text=f"Fetching {seg_key} · {adults} Adults + {children} Kids…")
         rows = fetch_prices_for_segment(
-            seg_key, sheet_df, checkin, checkout, adults, token)
+            seg_key, sheet_df, checkin, checkout, adults, children, token)
         seg_rows.extend(rows)
         step += 1
     all_data[seg_key] = pd.DataFrame(seg_rows)
@@ -502,8 +531,12 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
         st.divider()
 
         t1, t2, t3 = st.tabs(["📊 Price Comparison", "🗂️ Full Table", "📈 Charts"])
+        
+        # Get list of unique label outputs processed dynamically in our data loop
+        unique_labels = df["guest_label"].unique()
+        
         with t1:
-            render_price_cards(df, seg["color"], adult_counts)
+            render_price_cards(df, seg["color"], unique_labels)
         with t2:
             render_table(df)
         with t3:
