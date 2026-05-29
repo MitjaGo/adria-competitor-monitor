@@ -133,13 +133,12 @@ def _apify_fetch_url(booking_url: str, checkin: date, checkout: date,
                      adults: int, children: int, token: str) -> dict | None:
     """
     Fetch price for a single Booking.com property URL via voyager/fast-booking-scraper.
-    Returns dict with price info or None on failure.
     """
     from apify_client import ApifyClient
     client = ApifyClient(token)
     nights = (checkout - checkin).days or 1
 
-    # Define standard ages for kids so Booking can accurately parse specific family configurations
+    # Dynamic ages calculation to appease Booking's API structure when kids are included
     if children == 1:
         children_ages = [5]
     elif children == 2:
@@ -183,7 +182,7 @@ def _apify_fetch_url(booking_url: str, checkin: date, checkout: date,
 
 def _demo_price(location: str, is_self: bool, checkin: date,
                 checkout: date, adults: int, children: int, seed_str: str) -> dict:
-    """Generate realistic demo price based on location, season, and guest numbers."""
+    """Generate realistic fallback demo price based on setup metrics."""
     nights = (checkout - checkin).days or 1
     base_map = {
         "Ankaran": 70, "Portorož": 90, "Izola": 65,
@@ -191,9 +190,9 @@ def _demo_price(location: str, is_self: bool, checkin: date,
     }
     base_night = base_map.get(location, 65)
     
-    # Calculate guest pricing scaling factors
-    adult_mult = 1.0  # structured around a baseline configuration of 2 adults
-    child_addon = children * 0.15  # Add an estimated 15% pricing increase per child
+    # Pricing configuration scaling values based on guest volume splits
+    adult_mult = {2: 1.0, 3: 1.3, 4: 1.55}.get(adults, 1.0)
+    child_addon = children * 0.15
     
     month  = checkin.month
     season = 1.5 if month in (7, 8) else 1.2 if month in (6, 9) else 0.75
@@ -239,7 +238,7 @@ def fetch_prices_for_segment(seg_key: str, sheet_df: pd.DataFrame,
         if not price_data:
             price_data = _demo_price(location, is_self, checkin, checkout, adults, children, name)
 
-        # Build clean visual grouping label for the UI
+        # Labels formatting dictionary map for cleaner card outputs
         if children == 0:
             guest_label = f"👥 {adults} Adults"
         elif children == 1:
@@ -384,7 +383,9 @@ with st.sidebar:
 
     st.divider()
     st.markdown("**Guests per room**")
-    show_2a = st.checkbox("2 Adults", value=True)
+    show_2a   = st.checkbox("2 Adults", value=True)
+    show_3a   = st.checkbox("3 Adults", value=False)
+    show_4a   = st.checkbox("4 Adults", value=False)
     show_2a1c = st.checkbox("2 Adults + 1 Child", value=False)
     show_2a2c = st.checkbox("2 Adults + 2 Children", value=False)
 
@@ -448,10 +449,12 @@ if not search_btn:
     st.info("👈 Select dates, guests and segments, then click **Fetch Prices**.")
     st.stop()
 
-# ── Validate guest structural selections ──────────────────────────────────────
-# guest_configs format maps explicit tuples out as: (Adults, Children)
+# ── Validate structural filter selection layouts ──────────────────────────────
+# Tuples tracking structure format maps values as: (Adults, Children)
 guest_configs = []
-if show_2a: guest_configs.append((2, 0))
+if show_2a:   guest_configs.append((2, 0))
+if show_3a:   guest_configs.append((3, 0))
+if show_4a:   guest_configs.append((4, 0))
 if show_2a1c: guest_configs.append((2, 1))
 if show_2a2c: guest_configs.append((2, 2))
 
