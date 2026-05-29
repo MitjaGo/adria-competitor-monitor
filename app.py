@@ -103,7 +103,7 @@ def scrape_booking_prices(checkin: date, checkout: date, adults: int, dest: str,
                 
             run = client.actor("automation-lab/booking-scraper").call(
                 run_input=run_input, 
-                timeout=timedelta(seconds=180)
+                wait=timedelta(seconds=180)
             )
             
             if _progress_element:
@@ -207,8 +207,8 @@ with st.sidebar:
     st.divider()
     st.markdown("**Guests per room**")
     show_2 = st.checkbox("2 adults", value=True)
-    show_3 = st.checkbox("3 adults", value=False) 
-    show_4 = st.checkbox("4 adults", value=False)
+    show_3 = st.checkbox("3 adults", value=True) 
+    show_4 = st.checkbox("4 adults", value=True)
 
     st.divider()
     region_filter = st.multiselect(
