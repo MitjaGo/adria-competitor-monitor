@@ -453,7 +453,7 @@ with st.sidebar:
     selected_meals = st.multiselect(
         "Show meal plans",
         options=meal_options,
-        default=meal_options,
+        default=[p["label"] for p in MEAL_PLANS if p["key"] != "fb"],
         help="Filter which meal plan types to display",
     )
 
