@@ -33,7 +33,7 @@ SHEETS = {
 
 # Hardcoded fallback data (used if Google Sheets is unreachable)
 FALLBACK_DATA = {
-    "🏰 Hotel Convent": [
+    "🏰 Hotel Convent 2": [
         {"hotel": "Hotel Convent",   "type": "self",       "location": "Ankaran",  "url": "https://www.booking.com/hotel/si/convent.sl.html"},
         {"hotel": "Hotel Riviera",   "type": "competitor", "location": "Portorož", "url": "https://www.booking.com/hotel/si/lifeclass-resort-portoroz-sr.sl.html"},
         {"hotel": "Hotel Histrion",  "type": "competitor", "location": "Portorož", "url": "https://www.booking.com/hotel/si/histrion.sl.html"},
@@ -41,7 +41,7 @@ FALLBACK_DATA = {
         {"hotel": "Hotel Marko",     "type": "competitor", "location": "Portorož", "url": "https://www.booking.com/hotel/si/marko.sl.html"},
         {"hotel": "Hotel Lucija",    "type": "competitor", "location": "Portorož", "url": "https://www.booking.com/hotel/si/lucija.sl.html"},
     ],
-    "🏡 Vile brez balkona": [
+    "🏡 Vile brez balkona 2": [
         {"hotel": "Vile brez Balkona",         "type": "self",       "location": "Ankaran", "url": "https://www.booking.com/hotel/si/depandansa-bor.sl.html"},
         {"hotel": "Hotel Vile Park",           "type": "competitor", "location": "Portorož","url": "https://www.booking.com/hotel/si/vile-park.sl.html"},
         {"hotel": "Depandanse San Simon",      "type": "competitor", "location": "Izola",   "url": "https://www.booking.com/hotel/si/san-simon-resort-depandances.sl.html"},
