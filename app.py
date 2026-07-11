@@ -181,15 +181,20 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
     """En Apify run za vse URL-je z enim številom gostov."""
     hdrs = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
 
+    # ⚠️ Točna struktura po dokumentaciji automation-lab/booking-scraper:
+    # - checkin/checkout: lowercase, format YYYY-MM-DD
+    # - currency: lowercase "eur"
+    # - startUrls: lista objektov z "url" ključem
     run_input = {
         "startUrls": [{"url": u} for u in urls if u.startswith("http")],
-        "checkIn":   checkin.strftime("%Y-%m-%d"),
-        "checkOut":  checkout.strftime("%Y-%m-%d"),
+        "checkin":   checkin.strftime("%Y-%m-%d"),   # lowercase!
+        "checkout":  checkout.strftime("%Y-%m-%d"),  # lowercase!
         "adults":    adults,
         "rooms":     1,
-        "currency":  "EUR",
+        "currency":  "eur",                          # lowercase!
         "language":  "en-gb",
-        "maxItems":  len(urls) * 5,
+        "maxResults": len(urls) * 5,                 # maxResults ne maxItems!
+        "sortBy":    "price",
     }
 
     r = requests.post(f"{APIFY_BASE}/acts/{APIFY_ACTOR}/runs",
@@ -684,14 +689,3 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
             render_table(df)
         with t3:
             render_charts(df)
-    
-        
-     
-
-
-
-    
-        
-  
-    
-        
