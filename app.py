@@ -199,7 +199,7 @@ def load_sheet(seg_key: str) -> pd.DataFrame:
         resp.raise_for_status()
         df = pd.read_csv(io.StringIO(resp.text))
         df.columns = [c.strip().lower() for c in df.columns]
-        for col in df.select_dtypes(include="object").columns:
+        for col in df.select_dtypes(include=["object", "string"]).columns:
             df[col] = df[col].astype(str).apply(fix_encoding)
         return df
     except Exception:
@@ -367,7 +367,7 @@ def render_table(df: pd.DataFrame, key: str = "default"):
     disp["Naš hotel"] = disp["Naš hotel"].apply(lambda x: "✓" if x else "")
     st.dataframe(
         disp,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
         column_config={
             "Skupaj €": st.column_config.NumberColumn(format="€%.0f"),
@@ -388,36 +388,36 @@ def render_table(df: pd.DataFrame, key: str = "default"):
 
 def _render_segment_content(df: pd.DataFrame, seg_key: str, t_label: str):
     """KPI vrstica + tabela za en segment + en termin."""
-    if df.empty:
+    if df is None or df.empty:
         st.warning("Ni podatkov za ta segment.")
         return
 
-    df_prices = df[df["price_eur"].notna() & (df["price_eur"] > 0)]
+    # Poskrbi da stolpci obstajajo
+    required = {"name", "is_self", "price_eur"}
+    if not required.issubset(df.columns):
+        st.warning("Podatki nimajo pravilnih stolpcev.")
+        return
 
-    # Varno zgradimo best — z eksplicitnimi stolpci da ne pride do KeyError
-    if not df_prices.empty and "name" in df_prices.columns and "is_self" in df_prices.columns:
-        best = df_prices.groupby(["name", "is_self"])["price_eur"].min().reset_index()
-    else:
-        best = pd.DataFrame(columns=["name", "is_self", "price_eur"])
+    df_prices = df[df["price_eur"].notna() & (df["price_eur"] > 0)].copy()
 
-    # Varno ločimo self / competitor
-    if not best.empty and "is_self" in best.columns:
-        self_rows = best[best["is_self"] == True]
-        comp_rows = best[best["is_self"] == False]
-    else:
-        self_rows = pd.DataFrame(columns=["name", "is_self", "price_eur"])
-        comp_rows = pd.DataFrame(columns=["name", "is_self", "price_eur"])
+    self_avg  = 0.0
+    comp_avg  = 0.0
+    n_comp    = 0
+    cheapest  = None
+    priciest  = None
 
-    self_avg = float(self_rows["price_eur"].mean()) if not self_rows.empty else 0.0
-    comp_avg = float(comp_rows["price_eur"].mean()) if not comp_rows.empty else 0.0
+    if not df_prices.empty:
+        best = df_prices.groupby(["name", "is_self"], as_index=False)["price_eur"].min()
+        self_df = best[best["is_self"] == True]
+        comp_df = best[best["is_self"] == False]
 
-    cheapest = None
-    priciest = None
-    if not comp_rows.empty and "price_eur" in comp_rows.columns:
-        cheapest = comp_rows.loc[comp_rows["price_eur"].idxmin()]
-        priciest = comp_rows.loc[comp_rows["price_eur"].idxmax()]
-
-    n_comp = int(comp_rows["name"].nunique()) if not comp_rows.empty and "name" in comp_rows.columns else 0
+        if not self_df.empty:
+            self_avg = float(self_df["price_eur"].mean())
+        if not comp_df.empty:
+            comp_avg  = float(comp_df["price_eur"].mean())
+            n_comp    = int(comp_df["name"].nunique())
+            cheapest  = comp_df.loc[comp_df["price_eur"].idxmin()]
+            priciest  = comp_df.loc[comp_df["price_eur"].idxmax()]
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
@@ -429,12 +429,12 @@ def _render_segment_content(df: pd.DataFrame, seg_key: str, t_label: str):
     c2.metric("Konkurenti", n_comp)
     c3.metric(
         "Najcenejši konkurent",
-        f"€{cheapest['price_eur']:,.0f}" if cheapest is not None else "–",
+        f"€{float(cheapest['price_eur']):,.0f}" if cheapest is not None else "–",
         str(cheapest["name"]) if cheapest is not None else "",
     )
     c4.metric(
         "Najdražji konkurent",
-        f"€{priciest['price_eur']:,.0f}" if priciest is not None else "–",
+        f"€{float(priciest['price_eur']):,.0f}" if priciest is not None else "–",
         str(priciest["name"]) if priciest is not None else "",
     )
 
@@ -642,6 +642,5 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
                 with t_tab:
                     _render_segment_content(
                         all_data[seg_key][t_label], seg_key, t_label
-                    )
-  
+                    )  
 
