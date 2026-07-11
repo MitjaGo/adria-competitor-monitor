@@ -62,7 +62,7 @@ MEAL_PLANS = [
     {"label": "🍴 Full Board",      "key": "fb",        "multiplier": 1.55},
 ]
 
-APIFY_ACTOR = "automation-lab~booking-scraper"
+APIFY_ACTOR = "runtime~booking-scraper"
 APIFY_BASE  = "https://api.apify.com/v2"
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
@@ -181,20 +181,24 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
     """En Apify run za vse URL-je z enim številom gostov."""
     hdrs = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
 
-    # ⚠️ Točna struktura po dokumentaciji automation-lab/booking-scraper:
-    # - checkin/checkout: lowercase, format YYYY-MM-DD
-    # - currency: lowercase "eur"
-    # - startUrls: lista objektov z "url" ključem
+    # runtime/booking-scraper — točna struktura iz dokumentacije
     run_input = {
         "startUrls": [{"url": u} for u in urls if u.startswith("http")],
-        "checkin":   checkin.strftime("%Y-%m-%d"),   # lowercase!
-        "checkout":  checkout.strftime("%Y-%m-%d"),  # lowercase!
-        "adults":    adults,
-        "rooms":     1,
-        "currency":  "eur",                          # lowercase!
-        "language":  "en-gb",
-        "maxResults": len(urls) * 5,                 # maxResults ne maxItems!
-        "sortBy":    "price",
+        "checkin":          checkin.strftime("%Y-%m-%d"),   # lowercase!
+        "checkout":         checkout.strftime("%Y-%m-%d"),  # lowercase!
+        "groupAdults":      adults,
+        "groupChildren":    "0",
+        "maxHotels":        len(urls) * 2,
+        "adultsOnly":       False,
+        "petsAllowed":      False,
+        "freeCancellation": False,
+        "getDetails":       True,   # True = vrne cene in sobe!
+        "failOnNoResults":  False,
+        "proxyConfiguration": {
+            "useApifyProxy":      True,
+            "apifyProxyGroups":   ["RESIDENTIAL"],
+            "apifyProxyCountry":  "SI",   # Slovenija = najboljši rezultati za .sl hotele
+        },
     }
 
     r = requests.post(f"{APIFY_BASE}/acts/{APIFY_ACTOR}/runs",
@@ -225,39 +229,89 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
 
     out: dict[str, list[dict]] = {}
     for h in raw:
+        # runtime/booking-scraper vrača "url" ali "bookingUrl"
         h_url     = h.get("url") or h.get("bookingUrl") or ""
         match_url = _match_url(h_url, urls)
         if not match_url:
+            # Fallback: primerjaj po hotel slugu v imenu
+            for u in urls:
+                slug = u.split("/hotel/")[1].split(".")[0] if "/hotel/" in u else ""
+                h_name = (h.get("name") or "").lower().replace(" ", "-").replace(".", "")
+                if slug and (slug in h_name or slug in h_url):
+                    match_url = u
+                    break
+        if not match_url:
             continue
 
-        price_eur = 0.0
-        for field in ["price", "minPrice", "lowestPrice", "priceForDisplay"]:
-            val = h.get(field)
-            if val:
-                try:
-                    price_eur = float(str(val).replace(",", "").replace("€", "").strip())
-                    if price_eur > 0:
-                        break
-                except Exception:
-                    pass
-        if price_eur == 0:
-            continue
+        stars  = int(h.get("stars") or h.get("starRating") or h.get("starScore") or 0)
+        rating = float(h.get("reviewScore") or h.get("rating") or h.get("score") or 0)
 
-        meal  = _normalize_meal(h.get("mealPlan") or h.get("boardType") or
-                                h.get("roomType") or "room only")
-        entry = {
-            "price_eur": price_eur,
-            "per_night": float(h.get("pricePerNight") or round(price_eur / nights, 2)),
-            "stars":     int(h.get("starRating") or h.get("stars") or 0),
-            "rating":    float(h.get("reviewScore") or h.get("rating") or 0),
-            "meal_plan": meal,
-            "source":    "apify_live",
-        }
+        # runtime/booking-scraper z getDetails:true vrača "rooms" array
+        rooms = h.get("rooms") or h.get("roomOffers") or []
+        if rooms:
+            for room in rooms:
+                # Cena sobe
+                r_price = 0.0
+                for f in ["price", "totalPrice", "priceTotal", "rawPrice"]:
+                    val = room.get(f)
+                    if val:
+                        try:
+                            r_price = float(str(val).replace(",","").replace("€","").strip())
+                            if r_price > 0:
+                                break
+                        except Exception:
+                            pass
+                if r_price == 0:
+                    continue
 
-        if match_url not in out:
-            out[match_url] = []
-        if meal not in {e["meal_plan"] for e in out[match_url]}:
-            out[match_url].append(entry)
+                # Meal plan iz sobe
+                r_meal = _normalize_meal(
+                    room.get("mealPlan") or room.get("boardType") or
+                    room.get("mealInfo") or room.get("name") or "room only"
+                )
+
+                entry = {
+                    "price_eur": r_price,
+                    "per_night": round(r_price / nights, 2),
+                    "stars":     stars,
+                    "rating":    rating,
+                    "meal_plan": r_meal,
+                    "source":    "apify_live",
+                }
+                if match_url not in out:
+                    out[match_url] = []
+                if r_meal not in {e["meal_plan"] for e in out[match_url]}:
+                    out[match_url].append(entry)
+        else:
+            # Brez sob — poskusi skupno ceno hotela
+            price_eur = 0.0
+            for f in ["price", "minPrice", "lowestPrice", "totalPrice", "priceFrom"]:
+                val = h.get(f)
+                if val:
+                    try:
+                        price_eur = float(str(val).replace(",","").replace("€","").strip())
+                        if price_eur > 0:
+                            break
+                    except Exception:
+                        pass
+            if price_eur == 0:
+                continue
+
+            meal = _normalize_meal(
+                h.get("mealPlan") or h.get("boardType") or "room only"
+            )
+            entry = {
+                "price_eur": price_eur,
+                "per_night": float(h.get("pricePerNight") or round(price_eur / nights, 2)),
+                "stars":     stars,
+                "rating":    rating,
+                "meal_plan": meal,
+                "source":    "apify_live",
+            }
+            if match_url not in out:
+                out[match_url] = []
+            if meal not in {e["meal_plan"] for e in out[match_url]}:
+                out[match_url].append(entry)
 
     return out
 
