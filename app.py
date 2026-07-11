@@ -258,23 +258,29 @@ def _extract_price(h: dict) -> float:
 def _apify_single_run(urls: list, checkin: date, checkout: date,
                       adults: int, nights: int, token: str) -> dict:
     out: dict = {}
+
     run_input = {
-        "startUrls": [{"url": u} for u in urls if u.startswith("http")],
-        "checkIn":   checkin.strftime("%Y-%m-%d"),
-        "checkOut":  checkout.strftime("%Y-%m-%d"),
-        "adults":    adults,
-        "children":  0,
-        "rooms":     1,
-        "currency":  "EUR",
-        "language":  "en-gb",
-        "maxItems":  len(urls) * 5,
-        "extractAdditionalHotelData": False,
+        "startUrls":                [{"url": u} for u in urls if u.startswith("http")],
+        "checkIn":                  checkin.strftime("%Y-%m-%d"),
+        "checkOut":                 checkout.strftime("%Y-%m-%d"),
+        "adults":                   adults,
+        "children":                 0,
+        "currency":                 "EUR",
+        "language":                 "en-gb",
+        "maxItems":                 len(urls) * 3,
+        "minScore":                 "1",
+        "minMaxPrice":              "0-999999",
+        "flexWindow":               "0",
+        "sortBy":                   "price",
+        "extractAdditionalHotelData": True,
     }
-    raw = _run_apify(run_input, token, max_items=len(urls) * 10)
+
+    raw = _run_apify(run_input, token, max_items=len(urls) * 5)
+
     for h in raw:
         if not isinstance(h, dict):
             continue
-        h_url  = h.get("url") or ""
+        h_url  = h.get("url") or h.get("bookingUrl") or ""
         price  = _extract_price(h)
         stars  = int(h.get("stars") or h.get("starRating") or 0)
         rating = float(h.get("reviewScore") or h.get("rating") or 0)
