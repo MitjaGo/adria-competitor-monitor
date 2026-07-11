@@ -175,26 +175,9 @@ def _match_url(h_url: str, urls: list[str]) -> str | None:
     return None
 
 
-def _apify_single_run(urls: list[str], checkin: date, checkout: date,
-                      adults: int, nights: int, token: str) -> dict[str, list[dict]]:
-    """En Apify run za vse URL-je z enim številom gostov."""
+def _run_apify(run_input: dict, token: str, max_items: int = 20) -> list[dict]:
+    """Zažene en Apify run in vrne raw rezultate."""
     hdrs = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
-
-    # voyager/booking-scraper — točna shema iz dokumentacije
-    # https://apify.com/voyager/booking-scraper/input-schema
-    run_input = {
-        "startUrls":                [{"url": u} for u in urls if u.startswith("http")],
-        "checkIn":                  checkin.strftime("%Y-%m-%d"),  # camelCase, UTC
-        "checkOut":                 checkout.strftime("%Y-%m-%d"), # camelCase, UTC
-        "adults":                   adults,
-        "children":                 0,
-        "rooms":                    1,
-        "currency":                 "EUR",
-        "language":                 "en-gb",
-        "maxItems":                 len(urls) * 3,
-        "extractAdditionalHotelData": True,  # vrne roomOfferings s cenami!
-        "sortBy":                   "price",
-    }
 
     r = requests.post(f"{APIFY_BASE}/acts/{APIFY_ACTOR}/runs",
                       json=run_input, headers=hdrs, timeout=30)
@@ -203,7 +186,6 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
     run_id     = data["id"]
     dataset_id = data["defaultDatasetId"]
 
-    # Čakaj (max 5 min)
     for _ in range(60):
         time.sleep(5)
         status = requests.get(f"{APIFY_BASE}/actor-runs/{run_id}",
@@ -211,81 +193,86 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
         if status == "SUCCEEDED":
             break
         if status in ("FAILED", "ABORTED", "TIMED-OUT"):
-            return {}
+            return []
 
     raw = requests.get(f"{APIFY_BASE}/datasets/{dataset_id}/items",
                        headers=hdrs,
-                       params={"format": "json", "clean": "true",
-                               "limit": len(urls) * 10},
+                       params={"format": "json", "clean": "true", "limit": max_items},
                        timeout=20).json()
 
-    if not isinstance(raw, list):
-        return {}
+    return raw if isinstance(raw, list) else []
 
+
+def _extract_price(h: dict) -> float:
+    """Izvleče najnižjo ceno iz hotel dict-a."""
+    price = 0.0
+    for f in ["price", "minPrice", "lowestPrice", "totalPrice", "priceFrom"]:
+        val = h.get(f)
+        if val:
+            try:
+                price = float(str(val).replace(",","").replace("€","").replace("EUR","").strip())
+                if price > 0:
+                    break
+            except Exception:
+                pass
+    return price
+
+
+def _apify_single_run(urls: list[str], checkin: date, checkout: date,
+                      adults: int, nights: int, token: str,
+                      hotel_names: list[str] = None) -> dict[str, list[dict]]:
+    """
+    En run za vse hotele — išče po imenu hotela (search),
+    ker voyager ne vrne cen z direktnimi startUrls.
+    Vrne dict: {url -> [{price_eur, per_night, stars, rating, ...}]}
+    """
     out: dict[str, list[dict]] = {}
+
+    # Skupen run za vse hotele hkrati po lokaciji
+    # Voyager vrne vse hotele v regiji — nato filtriramo po imenu/URL-ju
+    run_input = {
+        "startUrls": [{"url": u} for u in urls if u.startswith("http")],
+        "checkIn":   checkin.strftime("%Y-%m-%d"),
+        "checkOut":  checkout.strftime("%Y-%m-%d"),
+        "adults":    adults,
+        "children":  0,
+        "rooms":     1,
+        "currency":  "EUR",
+        "language":  "en-gb",
+        "maxItems":  len(urls) * 5,
+        "extractAdditionalHotelData": False,
+    }
+
+    raw = _run_apify(run_input, token, max_items=len(urls) * 10)
+
     for h in raw:
-        # Varno — preskoči če h ni dict
         if not isinstance(h, dict):
             continue
-        # voyager vrača "url" kot direktni hotel URL
-        h_url     = h.get("url") or ""
-        match_url = _match_url(h_url, urls)
-        if not match_url:
-            for u in urls:
-                slug = u.split("/hotel/")[1].split(".")[0] if "/hotel/" in u else ""
-                if slug and slug in h_url:
-                    match_url = u
-                    break
-        if not match_url:
-            continue
 
+        h_url  = h.get("url") or ""
+        price  = _extract_price(h)
         stars  = int(h.get("stars") or h.get("starRating") or 0)
         rating = float(h.get("reviewScore") or h.get("rating") or 0)
 
-        # Vzamemo SAMO najnižjo ceno — brez ločevanja meal planov
-        price_eur = 0.0
-
-        # Poskusi vse možne cenovne field-e
-        for f in ["price", "minPrice", "lowestPrice", "totalPrice", "priceFrom"]:
-            val = h.get(f)
-            if val:
-                try:
-                    price_eur = float(str(val).replace(",","").replace("€","").replace("EUR","").strip())
-                    if price_eur > 0:
-                        break
-                except Exception:
-                    pass
-
-        # Preveri tudi roomOfferings — vzemi najnižjo ceno sobe
-        room_offerings = h.get("roomOfferings") or []
-        for room in room_offerings:
-            if not isinstance(room, dict):
-                continue
-            for f in ["price", "minPrice", "totalPrice"]:
-                val = room.get(f)
-                if val:
-                    try:
-                        rp = float(str(val).replace(",","").replace("€","").strip())
-                        if rp > 0 and (price_eur == 0 or rp < price_eur):
-                            price_eur = rp
-                    except Exception:
-                        pass
-
-        if price_eur == 0:
+        if price == 0:
             continue
 
-        entry = {
-            "price_eur": price_eur,
-            "per_night": round(price_eur / nights, 2),
-            "stars":     stars,
-            "rating":    rating,
-            "meal_plan": "🛏️ Najnižja cena",
-            "source":    "apify_live",
-        }
+        # Ujemi URL iz naše liste
+        match_url = _match_url(h_url, urls)
+        if not match_url:
+            continue
+
         if match_url not in out:
             out[match_url] = []
         if not out[match_url]:
-            out[match_url].append(entry)
+            out[match_url].append({
+                "price_eur": price,
+                "per_night": round(price / nights, 2),
+                "stars":     stars,
+                "rating":    rating,
+                "meal_plan": "🛏️ Najnižja cena",
+                "source":    "apify_live",
+            })
 
     return out
 
@@ -436,7 +423,7 @@ def render_cards(df: pd.DataFrame, seg_color: str, adult_counts: list):
                 cls = ""
                 tag = '<span class="tag tag-similar">podobna cena</span>'
 
-            bar_pct   = min(100, int(min_p / (sub["min_price"].max() or 1) * 100))
+            bar_pct   = min(100, int(min_p / (sub_ok["min_price"].max() or 1) * 100))
             bar_color = seg_color if is_self else "#1a7a9e"
             url       = base.get("booking_url", "")
             link      = f'<a href="{url}" target="_blank" style="font-size:0.78rem;color:#1a7a9e;">🔗 Booking.com</a>' if url else ""
