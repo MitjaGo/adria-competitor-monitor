@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
 import time
-import random
 import requests
 import io
 
@@ -225,6 +224,9 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
 
     out: dict[str, list[dict]] = {}
     for h in raw:
+        # Varno — preskoči če h ni dict
+        if not isinstance(h, dict):
+            continue
         # voyager vrača "url" kot direktni hotel URL
         h_url     = h.get("url") or ""
         match_url = _match_url(h_url, urls)
@@ -240,69 +242,49 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
         stars  = int(h.get("stars") or h.get("starRating") or 0)
         rating = float(h.get("reviewScore") or h.get("rating") or 0)
 
-        # voyager z extractAdditionalHotelData:true vrača "roomOfferings"
+        # Vzamemo SAMO najnižjo ceno — brez ločevanja meal planov
+        price_eur = 0.0
+
+        # Poskusi vse možne cenovne field-e
+        for f in ["price", "minPrice", "lowestPrice", "totalPrice", "priceFrom"]:
+            val = h.get(f)
+            if val:
+                try:
+                    price_eur = float(str(val).replace(",","").replace("€","").replace("EUR","").strip())
+                    if price_eur > 0:
+                        break
+                except Exception:
+                    pass
+
+        # Preveri tudi roomOfferings — vzemi najnižjo ceno sobe
         room_offerings = h.get("roomOfferings") or []
-
-        if room_offerings:
-            for room in room_offerings:
-                # Cena: roomOfferings ima "price" ali "minPrice"
-                r_price = 0.0
-                for f in ["price", "minPrice", "totalPrice"]:
-                    val = room.get(f)
-                    if val:
-                        try:
-                            r_price = float(str(val).replace(",","").replace("€","").strip())
-                            if r_price > 0:
-                                break
-                        except Exception:
-                            pass
-                if r_price == 0:
-                    continue
-
-                # Meal plan iz roomOfferings
-                r_meal = _normalize_meal(
-                    room.get("mealPlan") or room.get("boardType") or
-                    room.get("breakfast") or room.get("name") or "room only"
-                )
-
-                entry = {
-                    "price_eur": r_price,
-                    "per_night": round(r_price / nights, 2),
-                    "stars":     stars,
-                    "rating":    rating,
-                    "meal_plan": r_meal,
-                    "source":    "apify_live",
-                }
-                if match_url not in out:
-                    out[match_url] = []
-                if r_meal not in {e["meal_plan"] for e in out[match_url]}:
-                    out[match_url].append(entry)
-        else:
-            # Brez roomOfferings — uporabi skupno ceno hotela
-            price_eur = 0.0
-            for f in ["price", "minPrice", "lowestPrice"]:
-                val = h.get(f)
+        for room in room_offerings:
+            if not isinstance(room, dict):
+                continue
+            for f in ["price", "minPrice", "totalPrice"]:
+                val = room.get(f)
                 if val:
                     try:
-                        price_eur = float(str(val).replace(",","").replace("€","").strip())
-                        if price_eur > 0:
-                            break
+                        rp = float(str(val).replace(",","").replace("€","").strip())
+                        if rp > 0 and (price_eur == 0 or rp < price_eur):
+                            price_eur = rp
                     except Exception:
                         pass
-            if price_eur == 0:
-                continue
 
-            meal = _normalize_meal(h.get("mealPlan") or "room only")
-            entry = {
-                "price_eur": price_eur,
-                "per_night": float(h.get("pricePerNight") or round(price_eur / nights, 2)),
-                "stars":     stars,
-                "rating":    rating,
-                "meal_plan": meal,
-                "source":    "apify_live",
-            }
-            if match_url not in out:
-                out[match_url] = []
+        if price_eur == 0:
+            continue
+
+        entry = {
+            "price_eur": price_eur,
+            "per_night": round(price_eur / nights, 2),
+            "stars":     stars,
+            "rating":    rating,
+            "meal_plan": "🛏️ Najnižja cena",
+            "source":    "apify_live",
+        }
+        if match_url not in out:
+            out[match_url] = []
+        if not out[match_url]:
             out[match_url].append(entry)
 
     return out
@@ -336,36 +318,7 @@ def apify_fetch_all(all_urls: list[str], checkin: date, checkout: date,
     return results
 
 
-# ── Demo data (fallback brez tokena) ─────────────────────────────────────────
-def demo_room_types(location: str, checkin: date, checkout: date,
-                    adults: int, name: str) -> list[dict]:
-    nights   = (checkout - checkin).days or 1
-    base_map = {"Ankaran": 70, "Portorož": 90, "Izola": 65,
-                "Strunjan": 60, "Fiesa": 55, "Koper": 50}
-    base_n   = base_map.get(location, 65)
-    a_mult   = {2: 1.0, 3: 1.35, 4: 1.65}.get(adults, 1.0)
-    month    = checkin.month
-    season   = 1.5 if month in (7, 8) else 1.2 if month in (6, 9) else 0.75
-    stars_m  = {"Ankaran": 4, "Portorož": 4, "Izola": 3,
-                "Strunjan": 3, "Fiesa": 3, "Koper": 3}
-
-    random.seed(hash(name + str(checkin) + str(adults)) % 99999)
-    base_total = base_n * a_mult * season * nights * random.uniform(0.9, 1.1)
-    rating     = round(random.uniform(7.4, 9.2), 1)
-    stars      = stars_m.get(location, 3)
-
-    out = []
-    for plan in MEAL_PLANS:
-        total = round(base_total * plan["multiplier"], 0)
-        out.append({
-            "price_eur": total,
-            "per_night": round(total / nights, 2),
-            "stars":     stars,
-            "rating":    rating,
-            "meal_plan": plan["label"],
-            "source":    "demo",
-        })
-    return out
+# Demo data je odstranjen — app prikazuje samo realne podatke iz Apify
 
 
 def assemble_segment(seg_key: str, sheet_df: pd.DataFrame,
@@ -386,10 +339,20 @@ def assemble_segment(seg_key: str, sheet_df: pd.DataFrame,
         url      = str(row.get("url", "")).strip()
 
         variants = batch.get(url, [])
-        if not variants:
-            variants = demo_room_types(location, checkin, checkout, adults, name)
-
-        for v in variants:
+        if variants:
+            for v in variants:
+                results.append({
+                    "name":        name,
+                    "location":    location,
+                    "is_self":     is_self,
+                    "adults":      adults,
+                    "nights":      nights,
+                    "booking_url": url,
+                    "segment":     seg_key,
+                    **v,
+                })
+        else:
+            # Ni cene — dodaj placeholder z napako
             results.append({
                 "name":        name,
                 "location":    location,
@@ -398,7 +361,12 @@ def assemble_segment(seg_key: str, sheet_df: pd.DataFrame,
                 "nights":      nights,
                 "booking_url": url,
                 "segment":     seg_key,
-                **v,
+                "price_eur":   None,
+                "per_night":   None,
+                "stars":       0,
+                "rating":      0.0,
+                "meal_plan":   "❌ Ni podatka",
+                "source":      "error",
             })
 
     return results
@@ -416,18 +384,41 @@ def render_cards(df: pd.DataFrame, seg_color: str, adult_counts: list):
             continue
         st.markdown(f"### 👥 {adults} odrasli")
 
-        best = sub.groupby("name")["price_eur"].min().reset_index()
-        best.columns = ["name", "min_price"]
-        sub = sub.merge(best, on="name")
+        # Loči hotele z in brez cene
+        sub_ok  = sub[sub["price_eur"].notna() & (sub["price_eur"] > 0)]
+        sub_err = sub[sub["price_eur"].isna()  | (sub["price_eur"] == 0)]
 
-        hotels   = sub.sort_values("min_price")["name"].unique()
+        # Pokaži napake na vrhu
+        for _, erow in sub_err.drop_duplicates("name").iterrows():
+            url  = erow.get("booking_url", "")
+            link = f'<a href="{url}" target="_blank" style="font-size:0.78rem;color:#1a7a9e;">🔗 Booking.com</a>' if url else ""
+            st.markdown(f"""
+<div class="property-card" style="border-top-color:#e74c3c;opacity:0.7;">
+  <div style="display:flex;justify-content:space-between;align-items:center;">
+    <div>
+      <b>{erow["name"]}</b> &nbsp;
+      <span style="font-size:0.75rem;background:#fde8e0;color:#c0392b;padding:2px 8px;border-radius:10px;">❌ Ni cene</span><br>
+      <span style="color:#888;font-size:0.82rem;">📍 {erow["location"]} &nbsp;·&nbsp; {link}</span>
+    </div>
+    <span style="color:#aaa;font-size:0.85rem;">ni razpoložljivo</span>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+        if sub_ok.empty:
+            continue
+
+        best = sub_ok.groupby("name")["price_eur"].min().reset_index()
+        best.columns = ["name", "min_price"]
+        sub_ok = sub_ok.merge(best, on="name")
+
+        hotels   = sub_ok.sort_values("min_price")["name"].unique()
         self_ref = None
-        sr = sub[sub["is_self"]]
+        sr = sub_ok[sub_ok["is_self"]]
         if not sr.empty:
             self_ref = float(sr["min_price"].iloc[0])
 
         for hotel in hotels:
-            hrows    = sub[sub["name"] == hotel]
+            hrows    = sub_ok[sub_ok["name"] == hotel]
             base     = hrows.iloc[0]
             is_self  = bool(base["is_self"])
             min_p    = float(base["min_price"])
@@ -450,12 +441,6 @@ def render_cards(df: pd.DataFrame, seg_color: str, adult_counts: list):
             url       = base.get("booking_url", "")
             link      = f'<a href="{url}" target="_blank" style="font-size:0.78rem;color:#1a7a9e;">🔗 Booking.com</a>' if url else ""
 
-            pills = ""
-            for _, mr in hrows.sort_values("price_eur").iterrows():
-                is_cheap = mr["price_eur"] == min_p
-                pcls = "meal-pill cheapest" if is_cheap else "meal-pill"
-                pills += f'<span class="{pcls}">{mr["meal_plan"]} · <b>€{mr["price_eur"]:,.0f}</b></span>'
-
             src_icon = "🟢" if base.get("source") == "apify_live" else "🟡"
 
             st.markdown(f"""
@@ -468,10 +453,9 @@ def render_cards(df: pd.DataFrame, seg_color: str, adult_counts: list):
         ⭐ {base['rating']} &nbsp;·&nbsp;
         📍 {base['location']} &nbsp;·&nbsp; {link}
       </span>
-      <div style="margin-top:0.5rem;">{pills}</div>
     </div>
     <div style="text-align:right;min-width:110px;">
-      <span style="font-size:0.75rem;color:#888;">od</span><br>
+      <span style="font-size:0.75rem;color:#888;">najnižja cena</span><br>
       <span style="font-size:1.5rem;font-weight:700;color:#0a4f6e;">€{min_p:,.0f}</span><br>
       <span style="color:#888;font-size:0.8rem;">€{hrows['per_night'].min():,.0f} / noč</span>
     </div>
@@ -574,15 +558,6 @@ with st.sidebar:
     show_4 = st.checkbox("4 odrasli", value=True)
 
     st.divider()
-    st.markdown("**🍽️ Vrsta ponudbe**")
-    meal_options = [p["label"] for p in MEAL_PLANS]
-    selected_meals = st.multiselect(
-        "Prikaži ponudbe",
-        options=meal_options,
-        default=[p["label"] for p in MEAL_PLANS if p["key"] != "fb"],
-    )
-
-    st.divider()
     st.markdown("**🏨 Segment**")
     selected_segments = st.multiselect(
         "Prikaži segmente",
@@ -621,7 +596,7 @@ if not search_btn:
                 <h4>{seg_key}</h4>
                 <p style="color:#666;font-size:0.9rem;">{seg['description']}</p>
                 <p style="color:#1a7a9e;font-size:0.85rem;font-weight:600;">
-                {n_comp} konkurentov · do 4 vrste ponudbe</p>
+                {n_comp} konkurentov</p>
             </div>""", unsafe_allow_html=True)
     st.info("👈 Izberi datume, goste in segment, nato klikni **Poišči cene**.")
     st.stop()
@@ -681,7 +656,7 @@ prog.progress(1.0, text="Končano!")
 time.sleep(0.3)
 prog.empty()
 
-src = "🟢 Živi podatki z Booking.com" if token else "🟡 Demo podatki (dodaj Apify token za žive cene)"
+src = "🟢 Živi podatki z Booking.com" if token else "🔴 Ni Apify tokena — dodaj ga v Streamlit Secrets"
 st.caption(f"{src} · {nights} noči · {checkin} → {checkout}")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -691,15 +666,13 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
     seg = SHEETS[seg_key]
     df  = all_data[seg_key]
 
-    if selected_meals:
-        df = df[df["meal_plan"].isin(selected_meals)]
-
     if df.empty:
         with tab:
             st.warning("Ni podatkov za ta segment.")
         continue
 
-    best      = df.groupby(["name", "is_self", "adults"])["price_eur"].min().reset_index()
+    df_prices = df[df["price_eur"].notna() & (df["price_eur"] > 0)]
+    best      = df_prices.groupby(["name", "is_self", "adults"])["price_eur"].min().reset_index() if not df_prices.empty else pd.DataFrame(columns=["name","is_self","adults","price_eur"])
     self_rows = best[best["is_self"]]
     comp_rows = best[~best["is_self"]]
     self_avg  = self_rows["price_eur"].mean() if not self_rows.empty else 0
