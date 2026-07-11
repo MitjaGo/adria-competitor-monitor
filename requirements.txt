@@ -1,5 +1,5 @@
-streamlit>=1.46.0
-requests>=2.31.0
-pandas>=2.0.0
-pillow>=11.0.0
+streamlit=1.46.0
+requests=2.31.0
+pandas=2.0.0
+pillow=11.0.0
 
