@@ -261,7 +261,6 @@ def render_table(df, key="default"):
     disp.columns = ["Hotel", "Kraj", "Zvezdice", "Ocena", "Vrsta ponudbe",
                     "Odrasli", "Noči", "Skupaj €", "Na noč €", "Naš hotel", "Link"]
     disp = disp.sort_values(["Hotel", "Skupaj €"])
-    disp["Zvezdice"]  = disp["Zvezdice"].apply(lambda n: "★" * int(n) if n else "–")
     disp["Naš hotel"] = disp["Naš hotel"].apply(lambda x: "✓" if x else "")
     st.dataframe(disp, use_container_width=True, hide_index=True,
                  column_config={
