@@ -662,11 +662,4 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
                   priciest["name"] if priciest is not None else "")
 
         st.divider()
-        t1, t2, t3 = st.tabs(["📊 Primerjava cen", "🗂️ Tabela", "📈 Grafi"])
-        with t1:
-            render_cards(df, seg["color"], adult_counts)
-        with t2:
-            # ↓ key=seg_key zagotavlja unikaten ID za vsak download gumb
-            render_table(df, key=seg_key)
-        with t3:
-            render_charts(df)
+        render_table(df, key=seg_key)
