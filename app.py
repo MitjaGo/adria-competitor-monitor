@@ -433,19 +433,19 @@ with st.sidebar:
     st.markdown("**Termini**")
     st.caption("Vnesi 1–4 termine iskanja.")
 
-    # Zberemo vse vnose — text_input izogiba segfault z date_input v expander
-    termini_raw = []
+    # Brez expander — direktni text inputi (expander povzroča segfault v py3.14)
     fmt = "%d.%m.%Y"
+    termini_raw = []
     for i in range(1, 5):
-        with st.expander(f"Termin {i}" + (" ✱" if i == 1 else ""), expanded=(i == 1)):
-            default_in  = today.strftime(fmt)
-            default_out = (today + timedelta(days=i)).strftime(fmt)
-            s_in   = st.text_input("Prihod (dd.mm.llll)", value=default_in,  key=f"ci_{i}")
-            s_out  = st.text_input("Odhod  (dd.mm.llll)", value=default_out, key=f"co_{i}")
-            active = st.checkbox("Vključi ta termin", value=(i == 1),         key=f"active_{i}")
-            termini_raw.append((s_in, s_out, active))
+        st.markdown(f"**Termin {i}**")
+        col_a, col_b = st.columns(2)
+        s_in  = col_a.text_input("Prihod", value=today.strftime(fmt),                    key=f"ci_{i}", placeholder="dd.mm.llll")
+        s_out = col_b.text_input("Odhod",  value=(today + timedelta(days=i)).strftime(fmt), key=f"co_{i}", placeholder="dd.mm.llll")
+        active = st.checkbox("Vključi", value=(i == 1), key=f"active_{i}")
+        termini_raw.append((s_in, s_out, active))
+        if i < 4:
+            st.markdown("---")
 
-    # Validacija po zbiranju
     termini = []
     for i, (s_in, s_out, active) in enumerate(termini_raw, 1):
         if not active:
@@ -454,12 +454,12 @@ with st.sidebar:
             c_in  = date(int(s_in[6:10]),  int(s_in[3:5]),  int(s_in[0:2]))
             c_out = date(int(s_out[6:10]), int(s_out[3:5]), int(s_out[0:2]))
         except Exception:
-            st.warning(f"Termin {i}: neveljaven datum. Uporabi format dd.mm.llll")
+            st.warning(f"Termin {i}: format dd.mm.llll")
             continue
         if c_out <= c_in:
-            st.warning(f"Termin {i}: odhod mora biti po prihodu.")
+            st.warning(f"Termin {i}: odhod > prihod!")
         elif (c_in, c_out) in termini:
-            st.warning(f"Termin {i}: ta termin je že dodan.")
+            st.warning(f"Termin {i}: duplikat.")
         else:
             termini.append((c_in, c_out))
 
@@ -533,13 +533,26 @@ if not selected_segments:
     st.stop()
 
 # ── Termin labele ─────────────────────────────────────────────────────────────
-t_labels = [f"{ci.strftime('%d.%m')}–{co.strftime('%d.%m')}" for ci, co in termini]
+t_labels = [f"{ci.strftime('%d.%m.%y')}–{co.strftime('%d.%m.%y')}" for ci, co in termini]
 
 # ── Token ─────────────────────────────────────────────────────────────────────
 token = _get_apify_token()
 if not token:
     st.error("Manjka Apify token. Dodaj ga v Streamlit Secrets: APIFY_TOKEN = '...'")
     st.stop()
+
+# ── Zagotovi unikatne t_labels ───────────────────────────────────────────────
+# Če sta dva termina z istim labelom, dodamo indeks
+seen = {}
+unique_t_labels = []
+for lbl in t_labels:
+    if lbl in seen:
+        seen[lbl] += 1
+        unique_t_labels.append(f"{lbl} ({seen[lbl]})")
+    else:
+        seen[lbl] = 0
+        unique_t_labels.append(lbl)
+t_labels = unique_t_labels
 
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 prog = st.progress(0, text="Nalagam seznam hotelov…")
