@@ -154,94 +154,78 @@ def load_sheet(seg_key: str) -> pd.DataFrame:
         return pd.DataFrame(FALLBACK_DATA.get(seg_key, []))
 
 
-# ── Apify REST API (no apify_client library needed) ───────────────────────────
-def _build_booking_url(base_url: str, checkin: date, checkout: date, adults: int) -> str:
-    """
-    Sestavi Booking.com URL z datumi in gosti da scraper dobi ceno.
-    Primer: https://www.booking.com/hotel/si/convent.sl.html
-         -> https://www.booking.com/hotel/si/convent.sl.html?checkin=2025-08-01&checkout=2025-08-08&group_adults=2&no_rooms=1
-    """
-    from urllib.parse import urlparse, urlencode, urlunparse, parse_qs, urlencode
-    params = {
-        "checkin":      checkin.strftime("%Y-%m-%d"),
-        "checkout":     checkout.strftime("%Y-%m-%d"),
-        "group_adults": adults,
-        "no_rooms":     1,
-        "selected_currency": "EUR",
-    }
-    separator = "&" if "?" in base_url else "?"
-    return base_url.rstrip("/") + separator + urlencode(params)
+# ── Apify REST API — MEGA BATCH (vsi hoteli + vsi gosti = EN run) ────────────
+def _normalize_meal(meal: str) -> str:
+    m = meal.lower()
+    if "breakfast" in m or "b&b" in m:
+        return "🍳 Bed & Breakfast"
+    elif "half" in m:
+        return "🍽️ Half Board"
+    elif "full" in m or "all inclusive" in m:
+        return "🍴 Full Board"
+    return "🛏️ Room only"
 
 
-def apify_fetch(booking_url: str, checkin: date, checkout: date,
-                adults: int, token: str) -> list[dict]:
-    """
-    Kliče Apify booking scraper direktno preko REST API.
-    Ne uporablja apify_client knjižnice — brez verzijskih problemov.
-    """
-    nights = (checkout - checkin).days or 1
-    hdrs   = {
-        "Content-Type":  "application/json",
-        "Authorization": f"Bearer {token}",
-    }
+def _match_url(h_url: str, urls: list[str]) -> str | None:
+    """Poišče originalni URL iz liste glede na hotel slug."""
+    for u in urls:
+        if "/hotel/" in u:
+            slug = u.split("/hotel/")[1].split(".")[0]
+            if slug and slug in h_url:
+                return u
+    return None
 
-    # Sestavi URL z datumi — scraper potrebuje to da vrne cene
-    full_url = _build_booking_url(booking_url, checkin, checkout, adults)
+
+def _apify_single_run(urls: list[str], checkin: date, checkout: date,
+                      adults: int, nights: int, token: str) -> dict[str, list[dict]]:
+    """En Apify run za vse URL-je z enim številom gostov."""
+    hdrs = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
 
     run_input = {
-        "startUrls":     [{"url": full_url}],
-        "checkIn":       checkin.strftime("%Y-%m-%d"),
-        "checkOut":      checkout.strftime("%Y-%m-%d"),
-        "adults":        adults,
-        "rooms":         1,
-        "currency":      "EUR",
-        "language":      "en-gb",
-        "maxItems":      10,
+        "startUrls": [{"url": u} for u in urls if u.startswith("http")],
+        "checkIn":   checkin.strftime("%Y-%m-%d"),
+        "checkOut":  checkout.strftime("%Y-%m-%d"),
+        "adults":    adults,
+        "rooms":     1,
+        "currency":  "EUR",
+        "language":  "en-gb",
+        "maxItems":  len(urls) * 5,
     }
 
-    # 1 — Zaženi actor
-    start = requests.post(
-        f"{APIFY_BASE}/acts/{APIFY_ACTOR}/runs",
-        json=run_input,
-        headers=hdrs,
-        timeout=30,
-    )
-    start.raise_for_status()
-    data       = start.json()["data"]
+    r = requests.post(f"{APIFY_BASE}/acts/{APIFY_ACTOR}/runs",
+                      json=run_input, headers=hdrs, timeout=30)
+    r.raise_for_status()
+    data       = r.json()["data"]
     run_id     = data["id"]
     dataset_id = data["defaultDatasetId"]
 
-    # 2 — Čakaj na rezultat (max 4 minute)
-    for _ in range(48):
+    # Čakaj (max 5 min)
+    for _ in range(60):
         time.sleep(5)
-        status_r = requests.get(
-            f"{APIFY_BASE}/actor-runs/{run_id}",
-            headers=hdrs,
-            timeout=15,
-        )
-        status = status_r.json()["data"]["status"]
+        status = requests.get(f"{APIFY_BASE}/actor-runs/{run_id}",
+                              headers=hdrs, timeout=15).json()["data"]["status"]
         if status == "SUCCEEDED":
             break
         if status in ("FAILED", "ABORTED", "TIMED-OUT"):
-            return []
+            return {}
 
-    # 3 — Poberi rezultate
-    items_r = requests.get(
-        f"{APIFY_BASE}/datasets/{dataset_id}/items",
-        headers=hdrs,
-        params={"format": "json", "clean": "true", "limit": 20},
-        timeout=20,
-    )
-    items_r.raise_for_status()
-    raw = items_r.json()
+    raw = requests.get(f"{APIFY_BASE}/datasets/{dataset_id}/items",
+                       headers=hdrs,
+                       params={"format": "json", "clean": "true",
+                               "limit": len(urls) * 10},
+                       timeout=20).json()
 
     if not isinstance(raw, list):
-        return []
+        return {}
 
-    results = []
+    out: dict[str, list[dict]] = {}
     for h in raw:
+        h_url     = h.get("url") or h.get("bookingUrl") or ""
+        match_url = _match_url(h_url, urls)
+        if not match_url:
+            continue
+
         price_eur = 0.0
-        # Poskusi različna polja za ceno
         for field in ["price", "minPrice", "lowestPrice", "priceForDisplay"]:
             val = h.get(field)
             if val:
@@ -251,46 +235,54 @@ def apify_fetch(booking_url: str, checkin: date, checkout: date,
                         break
                 except Exception:
                     pass
-
         if price_eur == 0:
             continue
 
-        per_night = float(h.get("pricePerNight") or round(price_eur / nights, 2))
-
-        # Meal plan / room type
-        meal = (h.get("mealPlan") or h.get("boardType") or
-                h.get("roomType") or "🛏️ Room only")
-
-        # Normalizacija meal plana
-        meal_lower = meal.lower()
-        if "breakfast" in meal_lower or "b&b" in meal_lower:
-            meal = "🍳 Bed & Breakfast"
-        elif "half" in meal_lower:
-            meal = "🍽️ Half Board"
-        elif "full" in meal_lower or "all inclusive" in meal_lower:
-            meal = "🍴 Full Board"
-        elif "room" in meal_lower or meal == "🛏️ Room only":
-            meal = "🛏️ Room only"
-
-        results.append({
+        meal  = _normalize_meal(h.get("mealPlan") or h.get("boardType") or
+                                h.get("roomType") or "room only")
+        entry = {
             "price_eur": price_eur,
-            "per_night": per_night,
+            "per_night": float(h.get("pricePerNight") or round(price_eur / nights, 2)),
             "stars":     int(h.get("starRating") or h.get("stars") or 0),
             "rating":    float(h.get("reviewScore") or h.get("rating") or 0),
             "meal_plan": meal,
             "source":    "apify_live",
-        })
+        }
 
-    # Deduplikacija po meal planu
-    seen = set()
-    unique = []
-    for r in results:
-        key = r["meal_plan"]
-        if key not in seen:
-            seen.add(key)
-            unique.append(r)
+        if match_url not in out:
+            out[match_url] = []
+        if meal not in {e["meal_plan"] for e in out[match_url]}:
+            out[match_url].append(entry)
 
-    return unique
+    return out
+
+
+def apify_fetch_all(all_urls: list[str], checkin: date, checkout: date,
+                    adult_counts: list[int], token: str,
+                    progress_cb=None) -> dict[int, dict[str, list[dict]]]:
+    """
+    MEGA BATCH: en run na število gostov (ne na hotel, ne na segment).
+    Vrne: {adults -> {url -> [variante]}}
+
+    Primer: 2 segmenta × 6 hotelov × 3 gosti = prej 18 runs
+                                               = zdaj 3 runs!
+    """
+    nights  = (checkin.__class__(*checkin.timetuple()[:3]) - checkin.__class__(*checkin.timetuple()[:3])).days
+    nights  = (checkout - checkin).days or 1
+    results = {}
+
+    for i, adults in enumerate(adult_counts):
+        if progress_cb:
+            progress_cb(i / len(adult_counts),
+                        f"🔍 Apify run {i+1}/{len(adult_counts)} · {adults} odrasli · {len(all_urls)} hotelov…")
+        try:
+            results[adults] = _apify_single_run(all_urls, checkin, checkout,
+                                                adults, nights, token)
+        except Exception as e:
+            st.warning(f"⚠️ Apify napaka za {adults} odrasle: {e}")
+            results[adults] = {}
+
+    return results
 
 
 # ── Demo data (fallback brez tokena) ─────────────────────────────────────────
@@ -325,9 +317,14 @@ def demo_room_types(location: str, checkin: date, checkout: date,
     return out
 
 
-def fetch_segment(seg_key: str, sheet_df: pd.DataFrame,
-                  checkin: date, checkout: date,
-                  adults: int, token: str | None) -> list[dict]:
+def assemble_segment(seg_key: str, sheet_df: pd.DataFrame,
+                     checkin: date, checkout: date,
+                     adults: int,
+                     batch: dict[str, list[dict]]) -> list[dict]:
+    """
+    Sestavi rezultate za en segment iz že pripravljenih batch podatkov.
+    Brez Apify klicev — ti so že narejeni v glavnem loopu.
+    """
     nights  = (checkout - checkin).days or 1
     results = []
 
@@ -337,13 +334,7 @@ def fetch_segment(seg_key: str, sheet_df: pd.DataFrame,
         location = fix_encoding(str(row.get("location", "")).strip())
         url      = str(row.get("url", "")).strip()
 
-        variants = []
-        if token and url.startswith("http"):
-            try:
-                variants = apify_fetch(url, checkin, checkout, adults, token)
-            except Exception as e:
-                st.warning(f"⚠️ Apify napaka za {name}: {e}")
-
+        variants = batch.get(url, [])
         if not variants:
             variants = demo_room_types(location, checkin, checkout, adults, name)
 
@@ -593,21 +584,46 @@ if not selected_segments:
     st.warning("Izberi vsaj en segment.")
     st.stop()
 
-# ── Fetch ─────────────────────────────────────────────────────────────────────
+# ── Fetch — MEGA BATCH ────────────────────────────────────────────────────────
 token    = _get_apify_token()
 all_data = {}
-total    = len(selected_segments) * len(adult_counts)
-step     = 0
-prog     = st.progress(0, text="Nalagam podatke…")
+prog     = st.progress(0, text="Nalagam seznam hotelov…")
 
+# 1 — Naložimo vse sheet-e in zberemo UNIKATNE URL-je
+sheets_data = {}
+all_urls    = []
 for seg_key in selected_segments:
-    sheet_df = load_sheet(seg_key)
-    rows     = []
+    df_sheet = load_sheet(seg_key)
+    sheets_data[seg_key] = df_sheet
+    for _, row in df_sheet.iterrows():
+        u = str(row.get("url", "")).strip()
+        if u.startswith("http") and u not in all_urls:
+            all_urls.append(u)
+
+n_hotels = len(all_urls)
+n_runs   = len(adult_counts) if token else 0
+
+st.caption(f"🏨 {n_hotels} unikatnih hotelov · {'🔴 ' + str(n_runs) + ' Apify runs' if token else '🟡 Demo način'}")
+
+# 2 — EN SET RUNOV za vse segmente skupaj (1 run na število gostov)
+mega_batch: dict[int, dict[str, list[dict]]] = {}
+if token and all_urls:
+    def _progress(pct, msg):
+        prog.progress(pct * 0.85, text=msg)
+
+    mega_batch = apify_fetch_all(all_urls, checkin, checkout,
+                                 adult_counts, token, _progress)
+
+# 3 — Sestavi podatke po segmentih
+prog.progress(0.9, text="Sestavljam rezultate…")
+for seg_key in selected_segments:
+    rows = []
     for adults in adult_counts:
-        prog.progress(step / total,
-                      text=f"Iščem {seg_key} · {adults} odrasli…")
-        rows.extend(fetch_segment(seg_key, sheet_df, checkin, checkout, adults, token))
-        step += 1
+        batch = mega_batch.get(adults, {})
+        rows.extend(assemble_segment(
+            seg_key, sheets_data[seg_key],
+            checkin, checkout, adults, batch
+        ))
     all_data[seg_key] = pd.DataFrame(rows)
 
 prog.progress(1.0, text="Končano!")
