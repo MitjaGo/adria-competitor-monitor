@@ -346,7 +346,7 @@ def assemble_segment(seg_key: str, sheet_df: pd.DataFrame,
                 "booking_url": url, "segment": seg_key,
                 "price_eur": None, "per_night": None,
                 "stars": 0, "rating": 0.0,
-                "meal_plan": "Ni podatka", "source": "error",
+                "meal_plan": "Ni razpoložljivosti", "source": "error",
             })
     return results
 
@@ -360,7 +360,7 @@ def render_table(df: pd.DataFrame, key: str = "default"):
     disp = df[["name", "location", "stars", "rating", "meal_plan",
                "adults", "nights", "price_eur", "per_night",
                "is_self", "booking_url"]].copy()
-    disp.columns = ["Hotel", "Kraj", "Zvezde", "Ocena", "Vrsta ponudbe",
+    disp.columns = ["Hotel", "Kraj", "Zvezdice", "Ocena", "Vrsta ponudbe",
                     "Odrasli", "Noči", "Skupaj €", "Na noč €", "Naš hotel", "Link"]
     disp = disp.sort_values(["Hotel", "Skupaj €"])
     disp["Zvezde"]    = disp["Zvezde"].apply(stars_html)
@@ -455,11 +455,24 @@ with st.sidebar:
     termini = []
     for i in range(1, 5):
         with st.expander(f"Termin {i}" + (" ✱" if i == 1 else ""), expanded=(i == 1)):
-            c_in  = st.date_input("Prihod", value=today, key=f"ci_{i}")
-            c_out = st.date_input("Odhod",  value=today, key=f"co_{i}")
+            c_in  = st.date_input("Prihod", value=None, key=f"ci_{i}")
+            c_out = st.date_input("Odhod",  value=None, key=f"co_{i}")
             active = st.checkbox("Vključi ta termin", value=(i == 1), key=f"active_{i}")
-            if active and c_out > c_in:
-                termini.append((c_in, c_out))
+
+            # Validacija
+            if active:
+                if not c_in and not c_out:
+                    st.caption("⚠️ Vnesi prihod in odhod.")
+                elif not c_in:
+                    st.caption("⚠️ Vnesi datum prihoda.")
+                elif not c_out:
+                    st.caption("⚠️ Vnesi datum odhoda.")
+                elif c_out <= c_in:
+                    st.caption("⚠️ Odhod mora biti po prihodu.")
+                else:
+                    nights_t = (c_out - c_in).days
+                    st.caption(f"✓ {nights_t} {'noč' if nights_t == 1 else 'noči'} · {c_in.strftime('%d.%m.%Y')} – {c_out.strftime('%d.%m.%Y')}")
+                    termini.append((c_in, c_out))
 
     # Fallback — vsaj en termin mora biti
     if not termini:
