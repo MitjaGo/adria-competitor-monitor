@@ -17,12 +17,12 @@ st.set_page_config(
 SHEET_BASE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRbx6EnzVBv0ZlRvF6_GuO2ZlCUkrwFp9iR_GmViy5r41hzsexrBW84MdvXI-0DtNul4fEUaLGjx27C/pub"
 
 SHEETS = {
-    "🏰 Hotel Convent": {
+    "Hotel Convent": {
         "csv_url":     f"{SHEET_BASE}?gid=0&single=true&output=csv",
         "color":       "#8e44ad",
         "description": "Historic convent hotel · Ankaran",
     },
-    "🏡 Vile brez balkona": {
+    "Vile brez balkona": {
         "csv_url":     f"{SHEET_BASE}?gid=1313360174&single=true&output=csv",
         "color":       "#27ae60",
         "description": "Villas without balcony · Ankaran",
@@ -318,7 +318,7 @@ def assemble_segment(seg_key: str, sheet_df: pd.DataFrame,
                 "per_night":   None,
                 "stars":       0,
                 "rating":      0.0,
-                "meal_plan":   "❌ Ni podatka",
+                "meal_plan":   "❌ Ni razpoložljivosti",
                 "source":      "error",
             })
 
