@@ -27,12 +27,6 @@ SHEETS = {
         "color":       "#27ae60",
         "description": "Villas without balcony · Ankaran",
     },
-    # Ko dodaš nove tabe v Google Sheet, dodaj tukaj:
-    # "🏊 Nov segment": {
-    #     "csv_url": f"{SHEET_BASE}?gid=TVOJA_GID&single=true&output=csv",
-    #     "color":   "#e67e22",
-    #     "description": "Opis · Ankaran",
-    # },
 }
 
 FALLBACK_DATA = {
@@ -153,7 +147,7 @@ def load_sheet(seg_key: str) -> pd.DataFrame:
         return pd.DataFrame(FALLBACK_DATA.get(seg_key, []))
 
 
-# ── Apify REST API — MEGA BATCH (vsi hoteli + vsi gosti = EN run) ────────────
+# ── Apify REST API ────────────────────────────────────────────────────────────
 def _normalize_meal(meal: str) -> str:
     m = meal.lower()
     if "breakfast" in m or "b&b" in m:
@@ -165,8 +159,7 @@ def _normalize_meal(meal: str) -> str:
     return "🛏️ Room only"
 
 
-def _match_url(h_url: str, urls: list[str]) -> str | None:
-    """Poišče originalni URL iz liste glede na hotel slug."""
+def _match_url(h_url: str, urls: list) -> str | None:
     for u in urls:
         if "/hotel/" in u:
             slug = u.split("/hotel/")[1].split(".")[0]
@@ -175,8 +168,7 @@ def _match_url(h_url: str, urls: list[str]) -> str | None:
     return None
 
 
-def _run_apify(run_input: dict, token: str, max_items: int = 20) -> list[dict]:
-    """Zažene en Apify run in vrne raw rezultate."""
+def _run_apify(run_input: dict, token: str, max_items: int = 20) -> list:
     hdrs = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
 
     r = requests.post(f"{APIFY_BASE}/acts/{APIFY_ACTOR}/runs",
@@ -204,7 +196,6 @@ def _run_apify(run_input: dict, token: str, max_items: int = 20) -> list[dict]:
 
 
 def _extract_price(h: dict) -> float:
-    """Izvleče najnižjo ceno iz hotel dict-a."""
     price = 0.0
     for f in ["price", "minPrice", "lowestPrice", "totalPrice", "priceFrom"]:
         val = h.get(f)
@@ -218,18 +209,10 @@ def _extract_price(h: dict) -> float:
     return price
 
 
-def _apify_single_run(urls: list[str], checkin: date, checkout: date,
-                      adults: int, nights: int, token: str,
-                      hotel_names: list[str] = None) -> dict[str, list[dict]]:
-    """
-    En run za vse hotele — išče po imenu hotela (search),
-    ker voyager ne vrne cen z direktnimi startUrls.
-    Vrne dict: {url -> [{price_eur, per_night, stars, rating, ...}]}
-    """
-    out: dict[str, list[dict]] = {}
+def _apify_single_run(urls: list, checkin: date, checkout: date,
+                      adults: int, nights: int, token: str) -> dict:
+    out: dict = {}
 
-    # Skupen run za vse hotele hkrati po lokaciji
-    # Voyager vrne vse hotele v regiji — nato filtriramo po imenu/URL-ju
     run_input = {
         "startUrls": [{"url": u} for u in urls if u.startswith("http")],
         "checkIn":   checkin.strftime("%Y-%m-%d"),
@@ -257,7 +240,6 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
         if price == 0:
             continue
 
-        # Ujemi URL iz naše liste
         match_url = _match_url(h_url, urls)
         if not match_url:
             continue
@@ -277,17 +259,9 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
     return out
 
 
-def apify_fetch_all(all_urls: list[str], checkin: date, checkout: date,
-                    adult_counts: list[int], token: str,
-                    progress_cb=None) -> dict[int, dict[str, list[dict]]]:
-    """
-    MEGA BATCH: en run na število gostov (ne na hotel, ne na segment).
-    Vrne: {adults -> {url -> [variante]}}
-
-    Primer: 2 segmenta × 6 hotelov × 3 gosti = prej 18 runs
-                                               = zdaj 3 runs!
-    """
-    nights  = (checkin.__class__(*checkin.timetuple()[:3]) - checkin.__class__(*checkin.timetuple()[:3])).days
+def apify_fetch_all(all_urls: list, checkin: date, checkout: date,
+                    adult_counts: list, token: str,
+                    progress_cb=None) -> dict:
     nights  = (checkout - checkin).days or 1
     results = {}
 
@@ -305,17 +279,10 @@ def apify_fetch_all(all_urls: list[str], checkin: date, checkout: date,
     return results
 
 
-# Demo data je odstranjen — app prikazuje samo realne podatke iz Apify
-
-
 def assemble_segment(seg_key: str, sheet_df: pd.DataFrame,
                      checkin: date, checkout: date,
                      adults: int,
-                     batch: dict[str, list[dict]]) -> list[dict]:
-    """
-    Sestavi rezultate za en segment iz že pripravljenih batch podatkov.
-    Brez Apify klicev — ti so že narejeni v glavnem loopu.
-    """
+                     batch: dict) -> list:
     nights  = (checkout - checkin).days or 1
     results = []
 
@@ -339,7 +306,6 @@ def assemble_segment(seg_key: str, sheet_df: pd.DataFrame,
                     **v,
                 })
         else:
-            # Ni cene — dodaj placeholder z napako
             results.append({
                 "name":        name,
                 "location":    location,
@@ -371,11 +337,9 @@ def render_cards(df: pd.DataFrame, seg_color: str, adult_counts: list):
             continue
         st.markdown(f"### 👥 {adults} odrasli")
 
-        # Loči hotele z in brez cene
         sub_ok  = sub[sub["price_eur"].notna() & (sub["price_eur"] > 0)]
         sub_err = sub[sub["price_eur"].isna()  | (sub["price_eur"] == 0)]
 
-        # Pokaži napake na vrhu
         for _, erow in sub_err.drop_duplicates("name").iterrows():
             url  = erow.get("booking_url", "")
             link = f'<a href="{url}" target="_blank" style="font-size:0.78rem;color:#1a7a9e;">🔗 Booking.com</a>' if url else ""
@@ -427,8 +391,7 @@ def render_cards(df: pd.DataFrame, seg_color: str, adult_counts: list):
             bar_color = seg_color if is_self else "#1a7a9e"
             url       = base.get("booking_url", "")
             link      = f'<a href="{url}" target="_blank" style="font-size:0.78rem;color:#1a7a9e;">🔗 Booking.com</a>' if url else ""
-
-            src_icon = "🟢" if base.get("source") == "apify_live" else "🟡"
+            src_icon  = "🟢" if base.get("source") == "apify_live" else "🟡"
 
             st.markdown(f"""
 <div class="property-card {cls}">
@@ -454,7 +417,8 @@ def render_cards(df: pd.DataFrame, seg_color: str, adult_counts: list):
         st.markdown("<br>", unsafe_allow_html=True)
 
 
-def render_table(df: pd.DataFrame):
+def render_table(df: pd.DataFrame, key: str = "default"):
+    """Prikaže tabelo in CSV gumb — key mora biti unikaten za vsak segment."""
     disp = df[["name", "location", "stars", "rating", "meal_plan",
                "adults", "nights", "price_eur", "per_night",
                "is_self", "booking_url"]].copy()
@@ -472,7 +436,14 @@ def render_table(df: pd.DataFrame):
                      "Link":       st.column_config.LinkColumn("Booking.com"),
                  })
     csv = disp.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇️ Prenesi CSV", csv, "konkurenti.csv", "text/csv")
+    # ↓ key mora biti unikaten — drugače Streamlit vrže DuplicateElementId
+    st.download_button(
+        "⬇️ Prenesi CSV",
+        csv,
+        f"konkurenti_{key}.csv",
+        "text/csv",
+        key=f"download_csv_{key}",
+    )
 
 
 def render_charts(df: pd.DataFrame):
@@ -602,7 +573,7 @@ token    = _get_apify_token()
 all_data = {}
 prog     = st.progress(0, text="Nalagam seznam hotelov…")
 
-# 1 — Naložimo vse sheet-e in zberemo UNIKATNE URL-je
+# 1 — Naložimo vse sheet-e in zberemo unikatne URL-je
 sheets_data = {}
 all_urls    = []
 for seg_key in selected_segments:
@@ -618,8 +589,8 @@ n_runs   = len(adult_counts) if token else 0
 
 st.caption(f"🏨 {n_hotels} unikatnih hotelov · {'🔴 ' + str(n_runs) + ' Apify runs' if token else '🟡 Demo način'}")
 
-# 2 — EN SET RUNOV za vse segmente skupaj (1 run na število gostov)
-mega_batch: dict[int, dict[str, list[dict]]] = {}
+# 2 — En set runov za vse segmente skupaj (1 run na število gostov)
+mega_batch: dict = {}
 if token and all_urls:
     def _progress(pct, msg):
         prog.progress(pct * 0.85, text=msg)
@@ -659,7 +630,10 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
         continue
 
     df_prices = df[df["price_eur"].notna() & (df["price_eur"] > 0)]
-    best      = df_prices.groupby(["name", "is_self", "adults"])["price_eur"].min().reset_index() if not df_prices.empty else pd.DataFrame(columns=["name","is_self","adults","price_eur"])
+    best      = (df_prices.groupby(["name", "is_self", "adults"])["price_eur"]
+                           .min().reset_index()
+                 if not df_prices.empty
+                 else pd.DataFrame(columns=["name", "is_self", "adults", "price_eur"]))
     self_rows = best[best["is_self"]]
     comp_rows = best[~best["is_self"]]
     self_avg  = self_rows["price_eur"].mean() if not self_rows.empty else 0
@@ -692,6 +666,7 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
         with t1:
             render_cards(df, seg["color"], adult_counts)
         with t2:
-            render_table(df)
+            # ↓ key=seg_key zagotavlja unikaten ID za vsak download gumb
+            render_table(df, key=seg_key)
         with t3:
             render_charts(df)
