@@ -444,24 +444,23 @@ with st.sidebar:
     termini = []
     for i in range(1, 5):
         with st.expander(f"Termin {i}" + (" ✱" if i == 1 else ""), expanded=(i == 1)):
-            c_in  = st.date_input("Prihod", value=today,
-                                  min_value=today, key=f"ci_{i}")
-            c_out = st.date_input("Odhod",  value=today + timedelta(days=2),
-                                  min_value=c_in + timedelta(days=1), key=f"co_{i}")
+            c_in  = st.date_input("Prihod", value=today, key=f"ci_{i}")
+            c_out = st.date_input("Odhod",  value=today, key=f"co_{i}")
             active = st.checkbox("Vključi ta termin", value=(i == 1), key=f"active_{i}")
-            if active:
+            if active and c_out > c_in:
                 termini.append((c_in, c_out))
 
     # Fallback — vsaj en termin mora biti
     if not termini:
-        termini = [(today, today + timedelta(days=2))]
+        termini = [(today, today + timedelta(days=1))]
 
     st.divider()
     st.markdown("**Objekt**")
     selected_segments = st.multiselect(
         "Prikaži objekte",
         options=list(SHEETS.keys()),
-        default=list(SHEETS.keys()),
+        default=[],
+        placeholder="Izberi objekte…",
     )
 
     st.divider()
