@@ -433,18 +433,17 @@ with st.sidebar:
     st.markdown("**Termini**")
     st.caption("Vnesi 1–4 termine iskanja.")
 
-    # Brez expander — direktni text inputi (expander povzroča segfault v py3.14)
+    # Brez columns in expander — samo navadni text inputi
     fmt = "%d.%m.%Y"
     termini_raw = []
     for i in range(1, 5):
         st.markdown(f"**Termin {i}**")
-        col_a, col_b = st.columns(2)
-        s_in  = col_a.text_input("Prihod", value=today.strftime(fmt),                    key=f"ci_{i}", placeholder="dd.mm.llll")
-        s_out = col_b.text_input("Odhod",  value=(today + timedelta(days=i)).strftime(fmt), key=f"co_{i}", placeholder="dd.mm.llll")
-        active = st.checkbox("Vključi", value=(i == 1), key=f"active_{i}")
+        s_in   = st.text_input(f"Prihod {i}", value=today.strftime(fmt), key=f"ci_{i}")
+        s_out  = st.text_input(f"Odhod {i}",  value=(today + timedelta(days=i)).strftime(fmt), key=f"co_{i}")
+        active = st.checkbox(f"Vključi termin {i}", value=(i == 1), key=f"active_{i}")
         termini_raw.append((s_in, s_out, active))
         if i < 4:
-            st.markdown("---")
+            st.divider()
 
     termini = []
     for i, (s_in, s_out, active) in enumerate(termini_raw, 1):
