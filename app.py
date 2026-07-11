@@ -382,17 +382,31 @@ def _render_segment_content(df: pd.DataFrame, seg_key: str, t_label: str):
         return
 
     df_prices = df[df["price_eur"].notna() & (df["price_eur"] > 0)]
-    best = (
-        df_prices.groupby(["name", "is_self"])["price_eur"].min().reset_index()
-        if not df_prices.empty
-        else pd.DataFrame(columns=["name", "is_self", "price_eur"])
-    )
-    self_rows = best[best["is_self"]]
-    comp_rows = best[~best["is_self"]]
-    self_avg  = self_rows["price_eur"].mean() if not self_rows.empty else 0
-    comp_avg  = comp_rows["price_eur"].mean() if not comp_rows.empty else 0
-    cheapest  = comp_rows.loc[comp_rows["price_eur"].idxmin()] if not comp_rows.empty else None
-    priciest  = comp_rows.loc[comp_rows["price_eur"].idxmax()] if not comp_rows.empty else None
+
+    # Varno zgradimo best — z eksplicitnimi stolpci da ne pride do KeyError
+    if not df_prices.empty and "name" in df_prices.columns and "is_self" in df_prices.columns:
+        best = df_prices.groupby(["name", "is_self"])["price_eur"].min().reset_index()
+    else:
+        best = pd.DataFrame(columns=["name", "is_self", "price_eur"])
+
+    # Varno ločimo self / competitor
+    if not best.empty and "is_self" in best.columns:
+        self_rows = best[best["is_self"] == True]
+        comp_rows = best[best["is_self"] == False]
+    else:
+        self_rows = pd.DataFrame(columns=["name", "is_self", "price_eur"])
+        comp_rows = pd.DataFrame(columns=["name", "is_self", "price_eur"])
+
+    self_avg = float(self_rows["price_eur"].mean()) if not self_rows.empty else 0.0
+    comp_avg = float(comp_rows["price_eur"].mean()) if not comp_rows.empty else 0.0
+
+    cheapest = None
+    priciest = None
+    if not comp_rows.empty and "price_eur" in comp_rows.columns:
+        cheapest = comp_rows.loc[comp_rows["price_eur"].idxmin()]
+        priciest = comp_rows.loc[comp_rows["price_eur"].idxmax()]
+
+    n_comp = int(comp_rows["name"].nunique()) if not comp_rows.empty and "name" in comp_rows.columns else 0
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric(
@@ -401,16 +415,16 @@ def _render_segment_content(df: pd.DataFrame, seg_key: str, t_label: str):
         delta=f"vs €{comp_avg:,.0f} trg" if comp_avg else None,
         delta_color="inverse" if self_avg > comp_avg else "normal",
     )
-    c2.metric("Konkurenti", len(comp_rows["name"].unique()))
+    c2.metric("Konkurenti", n_comp)
     c3.metric(
         "Najcenejši konkurent",
         f"€{cheapest['price_eur']:,.0f}" if cheapest is not None else "–",
-        cheapest["name"] if cheapest is not None else "",
+        str(cheapest["name"]) if cheapest is not None else "",
     )
     c4.metric(
         "Najdražji konkurent",
         f"€{priciest['price_eur']:,.0f}" if priciest is not None else "–",
-        priciest["name"] if priciest is not None else "",
+        str(priciest["name"]) if priciest is not None else "",
     )
 
     st.divider()
@@ -443,9 +457,9 @@ with st.sidebar:
         termini = [(today, today + timedelta(days=2))]
 
     st.divider()
-    st.markdown("**Segment**")
+    st.markdown("**Objekt**")
     selected_segments = st.multiselect(
-        "Prikaži segmente",
+        "Prikaži objekte",
         options=list(SHEETS.keys()),
         default=list(SHEETS.keys()),
     )
@@ -476,7 +490,7 @@ st.markdown("""
       <p>Slovenska obala · Primerjava cen · Booking.com</p>
     </div>
     <img src="https://www.adria-ankaran.si//app/uploads/2025/10/logo-Adria.jpg"
-         style="height:120px;width:auto;object-fit:contain;flex-shrink:0;margin-left:2rem;">
+         style="height:105px;width:105px;object-fit:contain;flex-shrink:0;margin-left:2rem;">
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -606,8 +620,5 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
                     _render_segment_content(
                         all_data[seg_key][t_label], seg_key, t_label
                     )
-
-        st.divider()
-        render_table(df, key=seg_key)
   
 
