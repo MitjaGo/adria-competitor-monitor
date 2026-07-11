@@ -433,19 +433,28 @@ with st.sidebar:
     st.markdown("**Termini**")
     st.caption("Vnesi 1–4 termine iskanja.")
 
-    # Zberemo vse vnose
+    # Zberemo vse vnose — text_input izogiba segfault z date_input v expander
     termini_raw = []
+    fmt = "%d.%m.%Y"
     for i in range(1, 5):
         with st.expander(f"Termin {i}" + (" ✱" if i == 1 else ""), expanded=(i == 1)):
-            c_in   = st.date_input("Prihod", value=today,                     key=f"ci_{i}")
-            c_out  = st.date_input("Odhod",  value=today + timedelta(days=i), key=f"co_{i}")
-            active = st.checkbox("Vključi ta termin", value=(i == 1),          key=f"active_{i}")
-            termini_raw.append((c_in, c_out, active))
+            default_in  = today.strftime(fmt)
+            default_out = (today + timedelta(days=i)).strftime(fmt)
+            s_in   = st.text_input("Prihod (dd.mm.llll)", value=default_in,  key=f"ci_{i}")
+            s_out  = st.text_input("Odhod  (dd.mm.llll)", value=default_out, key=f"co_{i}")
+            active = st.checkbox("Vključi ta termin", value=(i == 1),         key=f"active_{i}")
+            termini_raw.append((s_in, s_out, active))
 
     # Validacija po zbiranju
     termini = []
-    for i, (c_in, c_out, active) in enumerate(termini_raw, 1):
+    for i, (s_in, s_out, active) in enumerate(termini_raw, 1):
         if not active:
+            continue
+        try:
+            c_in  = date(int(s_in[6:10]),  int(s_in[3:5]),  int(s_in[0:2]))
+            c_out = date(int(s_out[6:10]), int(s_out[3:5]), int(s_out[0:2]))
+        except Exception:
+            st.warning(f"Termin {i}: neveljaven datum. Uporabi format dd.mm.llll")
             continue
         if c_out <= c_in:
             st.warning(f"Termin {i}: odhod mora biti po prihodu.")
