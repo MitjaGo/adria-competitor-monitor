@@ -155,6 +155,24 @@ def load_sheet(seg_key: str) -> pd.DataFrame:
 
 
 # ── Apify REST API (no apify_client library needed) ───────────────────────────
+def _build_booking_url(base_url: str, checkin: date, checkout: date, adults: int) -> str:
+    """
+    Sestavi Booking.com URL z datumi in gosti da scraper dobi ceno.
+    Primer: https://www.booking.com/hotel/si/convent.sl.html
+         -> https://www.booking.com/hotel/si/convent.sl.html?checkin=2025-08-01&checkout=2025-08-08&group_adults=2&no_rooms=1
+    """
+    from urllib.parse import urlparse, urlencode, urlunparse, parse_qs, urlencode
+    params = {
+        "checkin":      checkin.strftime("%Y-%m-%d"),
+        "checkout":     checkout.strftime("%Y-%m-%d"),
+        "group_adults": adults,
+        "no_rooms":     1,
+        "selected_currency": "EUR",
+    }
+    separator = "&" if "?" in base_url else "?"
+    return base_url.rstrip("/") + separator + urlencode(params)
+
+
 def apify_fetch(booking_url: str, checkin: date, checkout: date,
                 adults: int, token: str) -> list[dict]:
     """
@@ -167,9 +185,11 @@ def apify_fetch(booking_url: str, checkin: date, checkout: date,
         "Authorization": f"Bearer {token}",
     }
 
-    # Določi search query iz URL-ja
+    # Sestavi URL z datumi — scraper potrebuje to da vrne cene
+    full_url = _build_booking_url(booking_url, checkin, checkout, adults)
+
     run_input = {
-        "startUrls":     [{"url": booking_url}],
+        "startUrls":     [{"url": full_url}],
         "checkIn":       checkin.strftime("%Y-%m-%d"),
         "checkOut":      checkout.strftime("%Y-%m-%d"),
         "adults":        adults,
@@ -527,24 +547,6 @@ with st.sidebar:
         options=list(SHEETS.keys()),
         default=list(SHEETS.keys()),
     )
-
-    st.divider()
-    st.markdown("**🔑 Apify API Token**")
-    apify_input = st.text_input(
-        "Token za žive podatke",
-        type="password",
-        placeholder="apify_api_xxxx…",
-        help="Brezplačno na apify.com. Brez tokena = demo podatki.",
-    )
-    if apify_input:
-        import os; os.environ["APIFY_TOKEN"] = apify_input
-        st.success("✅ Live podatki aktivirani")
-    else:
-        import os
-        if os.getenv("APIFY_TOKEN") or (hasattr(st, "secrets") and st.secrets.get("APIFY_TOKEN")):
-            st.success("✅ Token naložen iz secrets")
-        else:
-            st.info("Ni tokena → demo podatki")
 
     st.divider()
     search_btn = st.button("🔍 Poišči cene", use_container_width=True)
