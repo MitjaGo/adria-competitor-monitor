@@ -62,7 +62,7 @@ MEAL_PLANS = [
     {"label": "🍴 Full Board",      "key": "fb",        "multiplier": 1.55},
 ]
 
-APIFY_ACTOR = "runtime~booking-scraper"
+APIFY_ACTOR = "voyager~booking-scraper"
 APIFY_BASE  = "https://api.apify.com/v2"
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
@@ -181,24 +181,20 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
     """En Apify run za vse URL-je z enim številom gostov."""
     hdrs = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
 
-    # runtime/booking-scraper — točna struktura iz dokumentacije
+    # voyager/booking-scraper — točna shema iz dokumentacije
+    # https://apify.com/voyager/booking-scraper/input-schema
     run_input = {
-        "startUrls": [{"url": u} for u in urls if u.startswith("http")],
-        "checkin":          checkin.strftime("%Y-%m-%d"),   # lowercase!
-        "checkout":         checkout.strftime("%Y-%m-%d"),  # lowercase!
-        "groupAdults":      adults,
-        "groupChildren":    "0",
-        "maxHotels":        len(urls) * 2,
-        "adultsOnly":       False,
-        "petsAllowed":      False,
-        "freeCancellation": False,
-        "getDetails":       True,   # True = vrne cene in sobe!
-        "failOnNoResults":  False,
-        "proxyConfiguration": {
-            "useApifyProxy":      True,
-            "apifyProxyGroups":   ["RESIDENTIAL"],
-            "apifyProxyCountry":  "SI",   # Slovenija = najboljši rezultati za .sl hotele
-        },
+        "startUrls":                [{"url": u} for u in urls if u.startswith("http")],
+        "checkIn":                  checkin.strftime("%Y-%m-%d"),  # camelCase, UTC
+        "checkOut":                 checkout.strftime("%Y-%m-%d"), # camelCase, UTC
+        "adults":                   adults,
+        "children":                 0,
+        "rooms":                    1,
+        "currency":                 "EUR",
+        "language":                 "en-gb",
+        "maxItems":                 len(urls) * 3,
+        "extractAdditionalHotelData": True,  # vrne roomOfferings s cenami!
+        "sortBy":                   "price",
     }
 
     r = requests.post(f"{APIFY_BASE}/acts/{APIFY_ACTOR}/runs",
@@ -229,30 +225,29 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
 
     out: dict[str, list[dict]] = {}
     for h in raw:
-        # runtime/booking-scraper vrača "url" ali "bookingUrl"
-        h_url     = h.get("url") or h.get("bookingUrl") or ""
+        # voyager vrača "url" kot direktni hotel URL
+        h_url     = h.get("url") or ""
         match_url = _match_url(h_url, urls)
         if not match_url:
-            # Fallback: primerjaj po hotel slugu v imenu
             for u in urls:
                 slug = u.split("/hotel/")[1].split(".")[0] if "/hotel/" in u else ""
-                h_name = (h.get("name") or "").lower().replace(" ", "-").replace(".", "")
-                if slug and (slug in h_name or slug in h_url):
+                if slug and slug in h_url:
                     match_url = u
                     break
         if not match_url:
             continue
 
-        stars  = int(h.get("stars") or h.get("starRating") or h.get("starScore") or 0)
-        rating = float(h.get("reviewScore") or h.get("rating") or h.get("score") or 0)
+        stars  = int(h.get("stars") or h.get("starRating") or 0)
+        rating = float(h.get("reviewScore") or h.get("rating") or 0)
 
-        # runtime/booking-scraper z getDetails:true vrača "rooms" array
-        rooms = h.get("rooms") or h.get("roomOffers") or []
-        if rooms:
-            for room in rooms:
-                # Cena sobe
+        # voyager z extractAdditionalHotelData:true vrača "roomOfferings"
+        room_offerings = h.get("roomOfferings") or []
+
+        if room_offerings:
+            for room in room_offerings:
+                # Cena: roomOfferings ima "price" ali "minPrice"
                 r_price = 0.0
-                for f in ["price", "totalPrice", "priceTotal", "rawPrice"]:
+                for f in ["price", "minPrice", "totalPrice"]:
                     val = room.get(f)
                     if val:
                         try:
@@ -264,10 +259,10 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
                 if r_price == 0:
                     continue
 
-                # Meal plan iz sobe
+                # Meal plan iz roomOfferings
                 r_meal = _normalize_meal(
                     room.get("mealPlan") or room.get("boardType") or
-                    room.get("mealInfo") or room.get("name") or "room only"
+                    room.get("breakfast") or room.get("name") or "room only"
                 )
 
                 entry = {
@@ -283,9 +278,9 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
                 if r_meal not in {e["meal_plan"] for e in out[match_url]}:
                     out[match_url].append(entry)
         else:
-            # Brez sob — poskusi skupno ceno hotela
+            # Brez roomOfferings — uporabi skupno ceno hotela
             price_eur = 0.0
-            for f in ["price", "minPrice", "lowestPrice", "totalPrice", "priceFrom"]:
+            for f in ["price", "minPrice", "lowestPrice"]:
                 val = h.get(f)
                 if val:
                     try:
@@ -297,9 +292,7 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
             if price_eur == 0:
                 continue
 
-            meal = _normalize_meal(
-                h.get("mealPlan") or h.get("boardType") or "room only"
-            )
+            meal = _normalize_meal(h.get("mealPlan") or "room only")
             entry = {
                 "price_eur": price_eur,
                 "per_night": float(h.get("pricePerNight") or round(price_eur / nights, 2)),
@@ -310,8 +303,7 @@ def _apify_single_run(urls: list[str], checkin: date, checkout: date,
             }
             if match_url not in out:
                 out[match_url] = []
-            if meal not in {e["meal_plan"] for e in out[match_url]}:
-                out[match_url].append(entry)
+            out[match_url].append(entry)
 
     return out
 
