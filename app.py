@@ -642,5 +642,5 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
                 with t_tab:
                     _render_segment_content(
                         all_data[seg_key][t_label], seg_key, t_label
-                    )  
+                    ) 
 
