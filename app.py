@@ -181,10 +181,15 @@ def fix_encoding(s: str) -> str:
 
 def _get_apify_token():
     import os
+    # Najprej poskusi Streamlit secrets (Streamlit Cloud)
     try:
-        return st.secrets.get("APIFY_TOKEN") or os.getenv("APIFY_TOKEN")
+        token = st.secrets["APIFY_TOKEN"]
+        if token:
+            return token
     except Exception:
-        return os.getenv("APIFY_TOKEN")
+        pass
+    # Fallback: environment variable (lokalno)
+    return os.getenv("APIFY_TOKEN")
 
 
 @st.cache_data(ttl=300)
@@ -528,6 +533,26 @@ t_labels = [f"{ci.strftime('%d.%m')}–{co.strftime('%d.%m')}" for ci, co in ter
 
 # ── Fetch ─────────────────────────────────────────────────────────────────────
 token = _get_apify_token()
+
+# ── Brez tokena ne moremo nič prikazati ──────────────────────────────────────
+if not token:
+    st.error("### 🔑 Manjka Apify token")
+    st.markdown("""
+Brez Apify tokena aplikacija ne more pridobiti cen z Booking.com.
+
+**Kako dodaš token:**
+1. Pojdi na [apify.com](https://apify.com) in se prijavi
+2. V meniju klikni **Settings → Integrations → API tokens**
+3. Kopiraj svoj token
+4. Na Streamlit Cloud odpri **Manage app → Secrets** in dodaj:
+
+```toml
+APIFY_TOKEN = "apify_api_xxxxxxxxxxxx"
+```
+5. Shrani in restartaj app
+""")
+    st.stop()
+
 prog  = st.progress(0, text="Nalagam seznam hotelov…")
 
 # 1. Naložimo sheet-e
@@ -545,11 +570,8 @@ for seg_key in selected_segments:
             urls_per_adults[adults].append(u)
 
 total_hotels = sum(len(v) for v in urls_per_adults.values())
-n_runs       = len(urls_per_adults) * len(termini) if token else 0
-st.caption(
-    f"{total_hotels} hotelov · {len(termini)} termin(i) · {n_runs} Apify runs"
-    if token else f"{total_hotels} hotelov · ni Apify tokena"
-)
+n_runs       = len(urls_per_adults) * len(termini)
+st.caption(f"{total_hotels} hotelov · {len(termini)} termin(i) · {n_runs} Apify runs")
 
 # 3. En set Apify runov na termin (progress popravno izračunan)
 all_batches: dict = {}   # {(ci, co) -> {adults -> {url -> [...]}}}
@@ -557,17 +579,14 @@ n_termini    = len(termini)
 n_adult_grps = len(urls_per_adults)
 
 for t_idx, (t_in, t_out) in enumerate(termini):
-    if token:
-        def _make_progress(t_idx_=t_idx):
-            def _cb(pct, msg):
-                overall = (t_idx_ + pct) / n_termini * 0.85
-                prog.progress(min(overall, 0.85), text=msg)
-            return _cb
-        batch = apify_fetch_all(
-            dict(urls_per_adults), t_in, t_out, token, _make_progress()
-        )
-    else:
-        batch = {}
+    def _make_progress(t_idx_=t_idx):
+        def _cb(pct, msg):
+            overall = (t_idx_ + pct) / n_termini * 0.85
+            prog.progress(min(overall, 0.85), text=msg)
+        return _cb
+    batch = apify_fetch_all(
+        dict(urls_per_adults), t_in, t_out, token, _make_progress()
+    )
     all_batches[(t_in, t_out)] = batch
 
 # 4. Sestavi DataFrames
@@ -588,8 +607,7 @@ prog.progress(1.0, text="Končano.")
 time.sleep(0.3)
 prog.empty()
 
-src = "Živi podatki · Booking.com" if token else "Ni Apify tokena — dodaj ga v Streamlit Secrets"
-st.caption(f"{src} · Termini: {', '.join(t_labels)}")
+st.caption(f"Živi podatki · Booking.com · Termini: {', '.join(t_labels)}")
 
 # ── Segment tabs ──────────────────────────────────────────────────────────────
 seg_tabs = st.tabs(selected_segments)
