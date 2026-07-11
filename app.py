@@ -452,29 +452,28 @@ with st.sidebar:
     st.markdown("**Termini**")
     st.caption("Vnesi 1–4 termine iskanja.")
 
-    termini = []
+    termini_raw = []
     for i in range(1, 5):
         with st.expander(f"Termin {i}" + (" ✱" if i == 1 else ""), expanded=(i == 1)):
-            c_in  = st.date_input("Prihod", value=None, key=f"ci_{i}")
-            c_out = st.date_input("Odhod",  value=None, key=f"co_{i}")
+            c_in  = st.date_input("Prihod", value=today,                    key=f"ci_{i}")
+            c_out = st.date_input("Odhod",  value=today + timedelta(days=i), key=f"co_{i}")
             active = st.checkbox("Vključi ta termin", value=(i == 1), key=f"active_{i}")
+            termini_raw.append((c_in, c_out, active))
 
-            # Validacija
-            if active:
-                if not c_in and not c_out:
-                    st.caption("⚠️ Vnesi prihod in odhod.")
-                elif not c_in:
-                    st.caption("⚠️ Vnesi datum prihoda.")
-                elif not c_out:
-                    st.caption("⚠️ Vnesi datum odhoda.")
-                elif c_out <= c_in:
-                    st.caption("⚠️ Odhod mora biti po prihodu.")
-                else:
-                    nights_t = (c_out - c_in).days
-                    st.caption(f"✓ {nights_t} {'noč' if nights_t == 1 else 'noči'} · {c_in.strftime('%d.%m.%Y')} – {c_out.strftime('%d.%m.%Y')}")
-                    termini.append((c_in, c_out))
+    # Validacija & sestava termine liste
+    termini = []
+    for i, (c_in, c_out, active) in enumerate(termini_raw, 1):
+        if not active:
+            continue
+        if c_out <= c_in:
+            st.sidebar.warning(f"Termin {i}: odhod mora biti po prihodu.")
+            continue
+        pair = (c_in, c_out)
+        if pair in termini:
+            st.sidebar.warning(f"Termin {i}: ta termin je že dodan.")
+            continue
+        termini.append(pair)
 
-    # Fallback — vsaj en termin mora biti
     if not termini:
         termini = [(today, today + timedelta(days=1))]
 
@@ -655,5 +654,6 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
                 with t_tab:
                     _render_segment_content(
                         all_data[seg_key][t_label], seg_key, t_label
+                    )     all_data[seg_key][t_label], seg_key, t_label
                     ) 
 
