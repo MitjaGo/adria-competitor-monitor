@@ -74,14 +74,17 @@ FALLBACK_DATA = {
 APIFY_ACTOR = "voyager~booking-scraper"
 APIFY_BASE  = "https://api.apify.com/v2"
 
-st.markdown("""
+st.html("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@300;400;500;700&display=swap');
-html, body, [class*="css"] { font-family: 'Noto Sans', 'Helvetica Neue', Arial, sans-serif; color: #111; }
+html, body, [class*="css"] {
+    font-family: 'Noto Sans', Helvetica Neue, Arial, sans-serif;
+    color: #111;
+}
 .main { background: #f5f5f0; }
 .hero-banner { background: #0058a3; padding: 1.5rem 2rem; color: white; margin-bottom: 2rem; border-radius: 2px; }
 .hero-banner h1 { color: white; margin: 0 0 0.15rem 0; font-size: 1.5rem; font-weight: 700; }
-.hero-banner p { margin: 0; opacity: 0.7; font-size: 0.85rem; font-weight: 300; }
+.hero-banner p { margin: 0; opacity: 0.7; font-size: 0.85rem; }
 .metric-card { background: white; padding: 1.4rem 1.6rem; border: 1px solid #e0e0e0; border-top: 3px solid #0058a3; border-radius: 2px; }
 .metric-card h4 { margin: 0 0 0.3rem 0; font-size: 0.95rem; font-weight: 700; }
 .metric-card p { margin: 0; font-size: 0.82rem; color: #555; }
@@ -99,7 +102,7 @@ html, body, [class*="css"] { font-family: 'Noto Sans', 'Helvetica Neue', Arial, 
 .stTabs [aria-selected="true"] { color: #111; border-bottom: 3px solid #0058a3; }
 hr { border-color: #e0e0e0; }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 
 def fix_encoding(s):
@@ -253,16 +256,13 @@ def assemble_segment(seg_key, sheet_df, checkin, checkout, adults, batch):
 
 
 def render_table(df, key="default"):
-    import json
-    import streamlit.components.v1 as components
-
-    # Brez stolpca Zvezdice
-    disp = df[["name", "location", "rating", "meal_plan",
+    disp = df[["name", "location", "stars", "rating", "meal_plan",
                "adults", "nights", "price_eur", "per_night", "is_self", "booking_url"]].copy()
-    disp.columns = ["Hotel", "Kraj", "Ocena", "Vrsta ponudbe",
+    disp.columns = ["Hotel", "Kraj", "Zvezdice", "Ocena", "Vrsta ponudbe",
                     "Odrasli", "Noči", "Skupaj €", "Na noč €", "Naš hotel", "Link"]
     disp = disp.sort_values(["Hotel", "Skupaj €"])
     disp["Naš hotel"] = disp["Naš hotel"].apply(lambda x: "✓" if x else "")
+    disp = disp.drop(columns=["Zvezdice"])
     st.dataframe(disp, use_container_width=True, hide_index=True,
                  column_config={
                      "Skupaj €": st.column_config.NumberColumn(format="€%.0f"),
@@ -271,20 +271,90 @@ def render_table(df, key="default"):
                      "Link":     st.column_config.LinkColumn("Booking.com"),
                  })
 
+    # Gumbi: CSV, kopiranje, tiskanje
+    csv = disp.to_csv(index=False).encode("utf-8")
     safe_key = key.replace(" ", "_").replace(".", "").replace("–", "_").replace("/", "_")
 
-    # Kopiraj v odložišče
-    tsv = disp.to_csv(index=False, sep="\t")
-    tsv_js = json.dumps(tsv)
-    components.html(f"""
-<button onclick="navigator.clipboard.writeText({tsv_js}).then(()=>{{
-    this.innerText='✓ Kopirano!';
-    setTimeout(()=>this.innerText='⎘ Kopiraj tabelo',2000);
-}})" style="background:white;color:#0058a3;border:2px solid #0058a3;
-padding:6px 16px;font-weight:700;font-size:12px;cursor:pointer;margin-top:4px;">
-⎘ Kopiraj tabelo
-</button>
-""", height=45)
+    # HTML tabela za kopiranje in tiskanje
+    html_rows = ""
+    for _, r in disp.iterrows():
+        cena = f"€{r['Skupaj €']:,.0f}" if pd.notna(r['Skupaj €']) else "–"
+        noc  = f"€{r['Na noč €']:,.0f}" if pd.notna(r['Na noč €']) else "–"
+        nas  = "✓" if r['Naš hotel'] == "✓" else ""
+        html_rows += f"""<tr>
+            <td>{r['Hotel']}</td><td>{r['Kraj']}</td><td>{r['Zvezdice']}</td>
+            <td>{r['Ocena']}</td><td>{r['Vrsta ponudbe']}</td>
+            <td>{int(r['Odrasli'])}</td><td>{int(r['Noči'])}</td>
+            <td>{cena}</td><td>{noc}</td><td>{nas}</td>
+        </tr>"""
+
+    html_table = f"""<table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:12px;width:100%;">
+        <thead style="background:#0058a3;color:white;">
+            <tr><th>Hotel</th><th>Kraj</th><th>Zvezdice</th><th>Ocena</th><th>Vrsta ponudbe</th>
+            <th>Odrasli</th><th>Noči</th><th>Skupaj €</th><th>Na noč €</th><th>Naš hotel</th></tr>
+        </thead>
+        <tbody>{html_rows}</tbody>
+    </table>"""
+
+    tab_copy, tab_print, tab_csv = st.columns(3)
+
+    with tab_csv:
+        st.download_button("↓ Prenesi CSV", csv, f"konkurenti_{safe_key}.csv", "text/csv", key=f"dl_{safe_key}")
+
+    with tab_copy:
+        copy_key = f"copy_{safe_key}"
+        st.components.v1.html(f"""
+        <button onclick="copyTable()" style="
+            background:white;color:#0058a3;border:2px solid #0058a3;
+            padding:6px 14px;font-weight:700;font-size:12px;cursor:pointer;
+            letter-spacing:0.05em;text-transform:uppercase;width:100%;">
+            ⎘ Kopiraj tabelo
+        </button>
+        <div id="tbl_{copy_key}" style="display:none">{html_table}</div>
+        <script>
+        function copyTable() {{
+            var el = document.getElementById("tbl_{copy_key}");
+            el.style.display = "block";
+            var range = document.createRange();
+            range.selectNode(el);
+            window.getSelection().removeAllRanges();
+            window.getSelection().addRange(range);
+            document.execCommand("copy");
+            window.getSelection().removeAllRanges();
+            el.style.display = "none";
+        }}
+        </script>
+        """, height=40)
+
+    with tab_print:
+        print_key = f"print_{safe_key}"
+        st.components.v1.html(f"""
+        <button onclick="printTable()" style="
+            background:white;color:#0058a3;border:2px solid #0058a3;
+            padding:6px 14px;font-weight:700;font-size:12px;cursor:pointer;
+            letter-spacing:0.05em;text-transform:uppercase;width:100%;">
+            ⎙ Natisni A4
+        </button>
+        <div id="ptbl_{print_key}" style="display:none">{html_table}</div>
+        <script>
+        function printTable() {{
+            var tbl = document.getElementById("ptbl_{print_key}").innerHTML;
+            var win = window.open("", "_blank");
+            win.document.write("<html><head><title>Adria Ankaran – Cenik</title>");
+            win.document.write("<style>body{{font-family:Arial,sans-serif;font-size:11px;margin:20px;}}");
+            win.document.write("table{{border-collapse:collapse;width:100%;}}");
+            win.document.write("th,td{{border:1px solid #ccc;padding:4px 6px;}}");
+            win.document.write("thead{{background:#0058a3;color:white;}}");
+            win.document.write("@page{{size:A4 landscape;margin:15mm;}}");
+            win.document.write("</style></head><body>");
+            win.document.write("<h3 style='color:#0058a3;margin-bottom:8px;'>Adria Ankaran — Monitor konkurentov</h3>");
+            win.document.write(tbl);
+            win.document.write("</body></html>");
+            win.document.close();
+            win.print();
+        }}
+        </script>
+        """, height=40)
 
 
 def render_segment(df, seg_key, t_label):
@@ -294,10 +364,12 @@ def render_segment(df, seg_key, t_label):
     if not {"name", "is_self", "price_eur"}.issubset(df.columns):
         st.warning("Napačni stolpci.")
         return
+
     df_p     = df[df["price_eur"].notna() & (df["price_eur"] > 0)].copy()
     self_avg = comp_avg = 0.0
     n_comp   = 0
     cheapest = priciest = None
+
     if not df_p.empty:
         best    = df_p.groupby(["name", "is_self"], as_index=False)["price_eur"].min()
         self_df = best[best["is_self"] == True]
@@ -309,6 +381,7 @@ def render_segment(df, seg_key, t_label):
             n_comp   = int(comp_df["name"].nunique())
             cheapest = comp_df.loc[comp_df["price_eur"].idxmin()]
             priciest = comp_df.loc[comp_df["price_eur"].idxmax()]
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Naša povp. cena", f"€{self_avg:,.0f}" if self_avg else "–",
               delta=f"vs €{comp_avg:,.0f} trg" if comp_avg else None,
@@ -320,8 +393,10 @@ def render_segment(df, seg_key, t_label):
     c4.metric("Najdražji konkurent",
               f"€{float(priciest['price_eur']):,.0f}" if priciest is not None else "–",
               str(priciest["name"]) if priciest is not None else "")
+
     st.divider()
     render_table(df, key=f"{seg_key}_{t_label}")
+
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -331,11 +406,18 @@ with st.sidebar:
     today = date.today()
 
     st.markdown("**Termin**")
-    checkin  = st.date_input("Datum prihoda", value=today,                     key="checkin")
-    checkout = st.date_input("Datum odhoda",  value=today + timedelta(days=1), key="checkout")
-
-    if checkout <= checkin:
-        st.warning("Odhod mora biti po prihodu.")
+    date_range = st.date_input(
+        "Prihod → Odhod",
+        value=(today, today + timedelta(days=1)),
+        key="date_range"
+    )
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+        checkin, checkout = date_range[0], date_range[1]
+        if checkout <= checkin:
+            st.warning("Odhod mora biti po prihodu.")
+            checkin  = today
+            checkout = today + timedelta(days=1)
+    else:
         checkin  = today
         checkout = today + timedelta(days=1)
 
@@ -351,22 +433,22 @@ with st.sidebar:
     st.divider()
     search_btn = st.button("Poišči cene", use_container_width=True)
 
-    st.markdown("""
+    st.html("""
 <div class="info-box">
 <b>Iskanje gostov:</b><br>
 2 osebi — Hotel Convent, Vile brez balkona, Vile z balkonom, Olive Suites<br>
 4 osebe — Premium Mobile Homes, Adria Apartments
 </div>
-""", unsafe_allow_html=True)
-    st.markdown("""
+""")
+    st.html("""
 <div class="info-box" style="margin-top:0.5rem;">
 <b>Podatki:</b> Seznam konkurentov se nalaga iz tvojega
 <b>Google Sheeta</b>. Dodaj hotel v sheet — app se samodejno posodobi.
 </div>
-""", unsafe_allow_html=True)
+""")
 
 # ── Hero ──────────────────────────────────────────────────────────────────────
-st.markdown("""
+st.html("""
 <div class="hero-banner">
   <div style="display:flex;justify-content:space-between;align-items:center;">
     <div>
@@ -377,7 +459,7 @@ st.markdown("""
          style="height:105px;width:105px;object-fit:contain;flex-shrink:0;margin-left:2rem;">
   </div>
 </div>
-""", unsafe_allow_html=True)
+""")
 
 # ── Welcome ───────────────────────────────────────────────────────────────────
 if not search_btn:
@@ -390,13 +472,13 @@ if not search_btn:
             sheet_df = load_sheet(seg_key)
             n_comp   = len(sheet_df[sheet_df["type"] == "competitor"]) if "type" in sheet_df.columns else "?"
             with col:
-                st.markdown(f"""<div class="metric-card">
+                st.html(f"""<div class="metric-card">
                     <h4>{seg_key}</h4>
                     <p>{seg['description']}</p>
                     <p class="n-comp">{n_comp} konkurentov</p>
                     <span class="adults-badge">{seg['adults']} odrasli</span>
-                </div>""", unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
+                </div>""")
+        st.write("")
     st.info("Vnesi termin, izberi objekte, nato klikni **Poišči cene**.")
     st.stop()
 
@@ -407,6 +489,7 @@ if not selected_segments:
 
 t_label = f"{checkin.strftime('%d.%m.%y')}–{checkout.strftime('%d.%m.%y')}"
 
+# ── Token ─────────────────────────────────────────────────────────────────────
 token = _get_apify_token()
 if not token:
     st.error("Manjka APIFY_TOKEN v Streamlit Secrets.")
@@ -457,10 +540,10 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
     seg    = SHEETS[seg_key]
     adults = seg["adults"]
     with tab:
-        st.markdown(f"""
+        st.html(f"""
 <div class="segment-header">
   <b style="font-size:1.05rem;">{seg_key}</b>
   <span class="adults-pill">{adults} odrasli</span>
   &nbsp;&nbsp;<span style="font-size:0.8rem;color:#666;">{seg['description']}</span>
-</div>""", unsafe_allow_html=True)
+</div>""")
         render_segment(all_data[seg_key], seg_key, t_label)
