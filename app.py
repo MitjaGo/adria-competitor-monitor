@@ -267,15 +267,10 @@ def render_table(df, key="default"):
                      "Ocena":    st.column_config.NumberColumn(format="%.1f"),
                      "Link":     st.column_config.LinkColumn("Booking.com"),
                  })
+    csv = disp.to_csv(index=False).encode("utf-8")
+    safe_key = key.replace(" ", "_").replace(".", "").replace("–", "_").replace("/", "_")
+    st.download_button("↓ Prenesi CSV", csv, f"konkurenti_{safe_key}.csv", "text/csv", key=f"dl_{safe_key}")
 
-import io as _io
-xlsx_buf = _io.BytesIO()
-disp.to_excel(xlsx_buf, index=False, engine="openpyxl")
-xlsx_buf.seek(0)
-safe_key = key.replace(" ", "_").replace(".", "").replace("–", "_").replace("/", "_")
-st.download_button("↓ Prenesi Excel", xlsx_buf.read(), f"konkurenti_{safe_key}.xlsx",
-                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                   key=f"dl_{safe_key}")
 
 def render_segment(df, seg_key, t_label):
     if df is None or df.empty:
@@ -344,7 +339,7 @@ with st.sidebar:
     )
 
     st.divider()
-    search_btn = st.button("Preveri cene", use_container_width=True)
+    search_btn = st.button("Poišči cene", use_container_width=True)
 
     st.markdown("""
 <div class="info-box">
@@ -356,7 +351,7 @@ with st.sidebar:
     st.markdown("""
 <div class="info-box" style="margin-top:0.5rem;">
 <b>Podatki:</b> Seznam konkurentov se nalaga iz tvojega
-<b>Google Sheeta</b>. Dodaj konkurenčni objekt v sheet — app se samodejno posodobi.
+<b>Google Sheeta</b>. Dodaj hotel v sheet — app se samodejno posodobi.
 </div>
 """, unsafe_allow_html=True)
 
