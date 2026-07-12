@@ -253,6 +253,9 @@ def assemble_segment(seg_key, sheet_df, checkin, checkout, adults, batch):
 
 
 def render_table(df, key="default"):
+    import json
+    import streamlit.components.v1 as components
+
     # Brez stolpca Zvezdice
     disp = df[["name", "location", "rating", "meal_plan",
                "adults", "nights", "price_eur", "per_night", "is_self", "booking_url"]].copy()
@@ -267,9 +270,21 @@ def render_table(df, key="default"):
                      "Ocena":    st.column_config.NumberColumn(format="%.1f"),
                      "Link":     st.column_config.LinkColumn("Booking.com"),
                  })
-    csv = disp.to_csv(index=False).encode("utf-8")
+
     safe_key = key.replace(" ", "_").replace(".", "").replace("–", "_").replace("/", "_")
-    st.download_button("↓ Prenesi CSV", csv, f"konkurenti_{safe_key}.csv", "text/csv", key=f"dl_{safe_key}")
+
+    # Kopiraj v odložišče
+    tsv = disp.to_csv(index=False, sep="\t")
+    tsv_js = json.dumps(tsv)
+    components.html(f"""
+<button onclick="navigator.clipboard.writeText({tsv_js}).then(()=>{{
+    this.innerText='✓ Kopirano!';
+    setTimeout(()=>this.innerText='⎘ Kopiraj tabelo',2000);
+}})" style="background:white;color:#0058a3;border:2px solid #0058a3;
+padding:6px 16px;font-weight:700;font-size:12px;cursor:pointer;margin-top:4px;">
+⎘ Kopiraj tabelo
+</button>
+""", height=45)
 
 
 def render_segment(df, seg_key, t_label):
@@ -279,12 +294,10 @@ def render_segment(df, seg_key, t_label):
     if not {"name", "is_self", "price_eur"}.issubset(df.columns):
         st.warning("Napačni stolpci.")
         return
-
     df_p     = df[df["price_eur"].notna() & (df["price_eur"] > 0)].copy()
     self_avg = comp_avg = 0.0
     n_comp   = 0
     cheapest = priciest = None
-
     if not df_p.empty:
         best    = df_p.groupby(["name", "is_self"], as_index=False)["price_eur"].min()
         self_df = best[best["is_self"] == True]
@@ -296,7 +309,6 @@ def render_segment(df, seg_key, t_label):
             n_comp   = int(comp_df["name"].nunique())
             cheapest = comp_df.loc[comp_df["price_eur"].idxmin()]
             priciest = comp_df.loc[comp_df["price_eur"].idxmax()]
-
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Naša povp. cena", f"€{self_avg:,.0f}" if self_avg else "–",
               delta=f"vs €{comp_avg:,.0f} trg" if comp_avg else None,
@@ -308,10 +320,8 @@ def render_segment(df, seg_key, t_label):
     c4.metric("Najdražji konkurent",
               f"€{float(priciest['price_eur']):,.0f}" if priciest is not None else "–",
               str(priciest["name"]) if priciest is not None else "")
-
     st.divider()
     render_table(df, key=f"{seg_key}_{t_label}")
-
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
