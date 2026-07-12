@@ -267,9 +267,15 @@ def render_table(df, key="default"):
                      "Ocena":    st.column_config.NumberColumn(format="%.1f"),
                      "Link":     st.column_config.LinkColumn("Booking.com"),
                  })
-    csv = disp.to_excel((index=False).encode("utf-8")
-    safe_key = key.replace(" ", "_").replace(".", "").replace("–", "_").replace("/", "_")
-    st.download_button("↓ Prenesi CSV", csv, f"konkurenti_{safe_key}.xlsx", "text/csv", key=f"dl_{safe_key}")
+
+import io as _io
+xlsx_buf = _io.BytesIO()
+disp.to_excel(xlsx_buf, index=False, engine="openpyxl")
+xlsx_buf.seek(0)
+safe_key = key.replace(" ", "_").replace(".", "").replace("–", "_").replace("/", "_")
+st.download_button("↓ Prenesi Excel", xlsx_buf.read(), f"konkurenti_{safe_key}.xlsx",
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                   key=f"dl_{safe_key}")
 
 def render_segment(df, seg_key, t_label):
     if df is None or df.empty:
