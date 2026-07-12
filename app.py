@@ -76,7 +76,7 @@ FALLBACK_DATA = {
 APIFY_ACTOR = "voyager~booking-scraper"
 APIFY_BASE  = "https://api.apify.com/v2"
 
-st.markdown("""
+st.html("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@300;400;500;700&display=swap');
 html, body, [class*="css"] { font-family: 'Noto Sans', 'Helvetica Neue', Arial, sans-serif; color: #111; }
@@ -101,7 +101,7 @@ html, body, [class*="css"] { font-family: 'Noto Sans', 'Helvetica Neue', Arial, 
 .stTabs [aria-selected="true"] { color: #111; border-bottom: 3px solid #0058a3; }
 hr { border-color: #e0e0e0; }
 </style>
-""", unsafe_allow_html=True)
+""")
 
 
 def fix_encoding(s):
@@ -347,13 +347,21 @@ with st.sidebar:
     today = date.today()
 
     st.markdown("**Termin**")
-    checkin  = st.date_input("Datum prihoda", value=today,                     key="checkin")
-    checkout = st.date_input("Datum odhoda",  value=today + timedelta(days=1), key="checkout")
+    st.caption("Format: DD.MM.LLLL")
+    s_in  = st.text_input("Datum prihoda", value=today.strftime("%d.%m.%Y"), key="checkin")
+    s_out = st.text_input("Datum odhoda",  value=(today + timedelta(days=1)).strftime("%d.%m.%Y"), key="checkout")
+
+    try:
+        checkin  = date(int(s_in[6:10]),  int(s_in[3:5]),  int(s_in[0:2]))
+        checkout = date(int(s_out[6:10]), int(s_out[3:5]), int(s_out[0:2]))
+    except Exception:
+        checkin  = today
+        checkout = today + timedelta(days=1)
+        st.warning("Format: DD.MM.LLLL (npr. 12.07.2026)")
 
     if checkout <= checkin:
         st.warning("Odhod mora biti po prihodu.")
-        checkin  = today
-        checkout = today + timedelta(days=1)
+        checkout = checkin + timedelta(days=1)
 
     st.divider()
     st.markdown("**Objekt**")
@@ -367,22 +375,22 @@ with st.sidebar:
     st.divider()
     search_btn = st.button("Poišči cene", use_container_width=True)
 
-    st.markdown("""
+    st.html("""
 <div class="info-box">
 <b>Iskanje gostov:</b><br>
 2 osebi — Hotel Convent, Vile brez balkona, Vile z balkonom, Olive Suites<br>
 4 osebe — Premium Mobile Homes, Adria Apartments
 </div>
-""", unsafe_allow_html=True)
-    st.markdown("""
+""")
+    st.html("""
 <div class="info-box" style="margin-top:0.5rem;">
 <b>Podatki:</b> Seznam konkurentov se nalaga iz tvojega
 <b>Google Sheeta</b>. Dodaj hotel v sheet — app se samodejno posodobi.
 </div>
-""", unsafe_allow_html=True)
+""")
 
 # ── Hero ──────────────────────────────────────────────────────────────────────
-st.markdown("""
+st.html("""
 <div class="hero-banner">
   <div style="display:flex;justify-content:space-between;align-items:center;">
     <div>
@@ -393,7 +401,7 @@ st.markdown("""
          style="height:105px;width:105px;object-fit:contain;flex-shrink:0;margin-left:2rem;">
   </div>
 </div>
-""", unsafe_allow_html=True)
+""")
 
 # ── Welcome ───────────────────────────────────────────────────────────────────
 if not search_btn:
@@ -406,13 +414,13 @@ if not search_btn:
             sheet_df = load_sheet(seg_key)
             n_comp   = len(sheet_df[sheet_df["type"] == "competitor"]) if "type" in sheet_df.columns else "?"
             with col:
-                st.markdown(f"""<div class="metric-card">
+                st.html(f"""<div class="metric-card">
                     <h4>{seg_key}</h4>
                     <p>{seg['description']}</p>
                     <p class="n-comp">{n_comp} konkurentov</p>
                     <span class="adults-badge">{seg['adults']} odrasli</span>
-                </div>""", unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
+                </div>""")
+        st.write("")
     st.info("Vnesi termin, izberi objekte, nato klikni **Poišči cene**.")
     st.stop()
 
@@ -473,11 +481,12 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
     seg    = SHEETS[seg_key]
     adults = seg["adults"]
     with tab:
-        st.markdown(f"""
+        st.html(f"""
 <div class="segment-header">
   <b style="font-size:1.05rem;">{seg_key}</b>
   <span class="adults-pill">{adults} odrasli</span>
   &nbsp;&nbsp;<span style="font-size:0.8rem;color:#666;">{seg['description']}</span>
-</div>""", unsafe_allow_html=True)
+</div>""")
         render_segment(all_data[seg_key], seg_key, t_label)
+
 
