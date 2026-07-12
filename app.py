@@ -453,3 +453,14 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
   &nbsp;&nbsp;<span style="font-size:0.8rem;color:#666;">{seg['description']}</span>
 </div>""", unsafe_allow_html=True)
         render_segment(all_data[seg_key], seg_key, t_label)
+
+#----xlsx
+
+safe_key = key.replace(" ", "_").replace(".", "").replace("–", "_").replace("/", "_")
+import io as _io
+xlsx_buf = _io.BytesIO()
+disp.to_excel(xlsx_buf, index=False, engine="openpyxl")
+xlsx_buf.seek(0)
+st.download_button("↓ Prenesi Excel", xlsx_buf.read(), f"konkurenti_{safe_key}.xlsx",
+                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                   key=f"dl_{safe_key}")
