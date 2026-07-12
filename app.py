@@ -271,26 +271,6 @@ def render_table(df, key="default"):
     #safe_key = key.replace(" ", "_").replace(".", "").replace("–", "_").replace("/", "_")
     #st.download_button("↓ Prenesi CSV", csv, f"konkurenti_{safe_key}.csv", "text/csv", key=f"dl_{safe_key}")
 
-
-    # Kopiraj v odložišče
-    tsv = disp.to_csv(index=False, sep="\t")
-    st.components.v1.html(f"""
-    <textarea id="copy_area_{safe_key}" style="position:absolute;left:-9999px;">{tsv}</textarea>
-    <button onclick="
-    var t = document.getElementById('copy_area_{safe_key}');
-    t.select();
-    document.execCommand('copy');
-    this.innerText='✓ Kopirano!';
-    setTimeout(()=>this.innerText='⎘ Kopiraj za mail',2000);
-    " style="
-    background:white;color:#0058a3;border:2px solid #0058a3;
-    padding:6px 16px;font-weight:700;font-size:12px;cursor:pointer;
-    letter-spacing:0.05em;text-transform:uppercase;margin-top:6px;">
-    ⎘ Kopiraj za mail
-    </button>
-    """, height=50)
-
-
 def render_segment(df, seg_key, t_label):
     if df is None or df.empty:
         st.warning("Ni podatkov.")
