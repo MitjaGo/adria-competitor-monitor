@@ -480,3 +480,4 @@ for tab, seg_key in zip(seg_tabs, selected_segments):
   &nbsp;&nbsp;<span style="font-size:0.8rem;color:#666;">{seg['description']}</span>
 </div>""", unsafe_allow_html=True)
         render_segment(all_data[seg_key], seg_key, t_label)
+
